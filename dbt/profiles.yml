@@ -1,0 +1,22 @@
+signalconso:
+  target: dev
+  outputs:
+    dev:
+      type: bigquery
+      method: service-account
+      project: tri-demandes-clients
+      dataset: signalconso_dev
+      keyfile: "{{ env_var('GOOGLE_APPLICATION_CREDENTIALS') }}"
+      location: europe-west9
+      timeout_seconds: 300
+      threads: 4
+
+    prod:
+      type: bigquery
+      method: service-account
+      project: tri-demandes-clients
+      dataset: signalconso_prod
+      keyfile: "{{ env_var('GOOGLE_APPLICATION_CREDENTIALS') }}"
+      location: europe-west9
+      timeout_seconds: 300
+      threads: 8
