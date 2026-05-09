@@ -1,228 +1,139 @@
-# Data Science Boilerplate
+# Signal-Conso
 
-Welcome to the **Data Science Boilerplate**: A modern, production-ready template for data science projects with best practices.
+Plateforme intelligente de traitement automatique des signalements et de priorisation des demandes clients.
 
-This documentation contains the following sections:
+## Présentation
 
-- [Quick Start](#quick-start)
-- [Project Structure](#project-structure)
-- [Package Customization](#package-customization)
-- [Development Workflow](#development-workflow)
-- [Documentation](#documentation)
+**Signal-Conso** est une plateforme data & IA conçue pour automatiser le traitement des signalements clients.  
+Elle permet de collecter, nettoyer, classer et prioriser les demandes, puis d’exposer les prédictions via une API et un dashboard de suivi.
 
-# Quick Start
+## Objectifs
 
-## 1. Create a new repository
+Ce projet a pour objectifs de :
 
-### Option A: Use as GitHub Template
-1. Click "Use this template" on GitHub
-2. Choose "Create a new repository"
-3. Name your repository
+- collecter et préparer les signalements clients ;
+- classifier automatiquement les demandes par catégorie ;
+- estimer leur niveau de priorité ;
+- exposer les prédictions via une API ;
+- suivre le pipeline de traitement et les performances des modèles ;
+- automatiser les workflows avec des outils d’orchestration ;
+- structurer une base solide pour l’industrialisation du projet.
 
-### Option B: Clone and Customize
-```bash
-git clone <this-repo-url>
-cd <your-project-name>
-```
+## Fonctionnalités
 
-## 2. Customize Package Name (Optional)
+- ingestion et préparation des données ;
+- nettoyage, normalisation et enrichissement des signalements ;
+- stockage analytique dans BigQuery ;
+- transformation et modélisation avec dbt ;
+- entraînement et évaluation des modèles ;
+- exposition des prédictions via FastAPI ;
+- visualisation et suivi via Streamlit ;
+- orchestration des workflows via Prefect Cloud.
 
-You can easily customize the package name to match your project:
+## Stack technique
 
-```bash
-# Customize during setup
-make setup PACKAGE_NAME=my-awesome-project
+| Domaine | Outils |
+|---|---|
+| Versioning & CI/CD | GitHub, GitHub Actions |
+| Qualité de code | Ruff, SQLFluff, pre-commit |
+| Conteneurisation | Docker, Docker Compose |
+| Infrastructure | GCS |
+| Stockage & transformation | BigQuery, dbt-bigquery |
+| Orchestration | Prefect Cloud |
+| API de prédiction | FastAPI |
+| Visualisation | Streamlit |
 
-# Or customize separately
-make customize-package PACKAGE_NAME=my-awesome-project
-```
+## Architecture
 
-The package name will automatically be converted to a valid Python module name (hyphens become underscores).
+- **Ingestion** : récupération des données et contrôles qualité
+- **Transformation** : nettoyage, normalisation et préparation des jeux de données
+- **Stockage analytique** : entrepôt de données dans BigQuery
+- **Modélisation** : entraînement et évaluation du modèle de classification / priorisation
+- **API** : exposition des prédictions via FastAPI
+- **Orchestration** : automatisation des workflows avec Prefect Cloud
+- **Dashboard** : visualisation, suivi des métriques et monitoring
 
-## 3. Setup Development Environment
+## Structure des données
 
-```bash
-# Install dependencies and setup virtual environment
-make setup
+Le dépôt ne versionne pas les fichiers volumineux.
 
-# Install pre-commit hooks
-make install_precommit
-```
+- `data/raw/` : données brutes locales ou temporaires
+- `data/processed/` : données nettoyées et préparées
+- `data/models/` : modèles entraînés
+- GCS : stockage des jeux de données, modèles et prédictions
 
-That's it! Your development environment is ready.
+## Prérequis
 
-# Project Structure
+- Python 3.11+
+- Docker
+- Compte GCP configuré
+- `gcloud` installé
+- Accès à BigQuery et GCS
 
-This boilerplate provides a recommended repository structure following Python best practices:
+## Installation
 
-```
-├── src/                           # Source code (src layout)
-│   └── your_package_name/         # Your main package
-│       ├── __init__.py
-│       ├── core/                  # Core functionality
-│       │   ├── __init__.py
-│       │   ├── data_processing.py
-│       │   └── models.py
-│       └── utils/                 # Utility functions
-│           ├── __init__.py
-│           └── helpers.py
-├── tests/                         # Test files
-│   ├── unit_tests/
-│   ├── integration_tests/
-│   └── data/
-├── notebooks/                     # Jupyter notebooks
-├── docs/                          # Documentation
-├── config/                        # Configuration files
-├── bin/                           # Executable scripts
-├── data/                          # Data files (gitignored)
-├── secrets/                       # Sensitive files (gitignored)
-├── pyproject.toml                 # Project configuration
-├── requirements.txt               # Runtime dependencies
-├── Makefile                       # Development commands
-└── .pre-commit-config.yaml        # Pre-commit hooks
-```
-
-## Key Benefits of This Structure
-
-- **Src Layout**: Prevents import confusion and follows Python best practices
-- **Clear Separation**: Source code, tests, notebooks, and configuration are clearly separated
-- **Scalable**: Easy to add new modules and packages
-- **Standard**: Follows industry conventions
-
-# Package Customization
-
-The boilerplate makes it easy to customize the package name for your project:
-
-## How It Works
-
-- **Package Name**: The name you specify (e.g., "my-awesome-project")
-- **Python Module**: Automatically converted (e.g., "my_awesome_project")
-
-## Customization Commands
+### 1. Créer l’environnement Python
 
 ```bash
-# Show current configuration
-make customize-package
-
-# Customize package name
-make customize-package PACKAGE_NAME=my-ds-project
-
-# Customize during setup
-make setup PACKAGE_NAME=my-ds-project
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
 ```
 
-## What Gets Updated
-
-- `pyproject.toml`: Package name and module configuration
-- `src/` directory: Renamed to match your module name
-- All imports will work with the new module name
-
-## Examples
-
-| Package Name | Python Module | Import Statement |
-|--------------|---------------|------------------|
-| `my-project` | `my_project` | `from my_project import ...` |
-| `awesome-ds` | `awesome_ds` | `from awesome_ds import ...` |
-| `ml-pipeline` | `ml_pipeline` | `from ml_pipeline import ...` |
-
-# Development Workflow
-
-## Available Commands
+### 2. Configurer dbt
 
 ```bash
-# Setup development environment
-make setup
+# Authentification GCP
+gcloud auth application-default login
 
-# Install pre-commit hooks
-make install_precommit
+# Copier le fichier de configuration dbt
+cp dbt/profiles.yml.example ~/.dbt/profiles.yml
 
-# Format and lint code
-make format
-
-# Run tests
-make run_tests
-
-# Serve documentation locally
-make serve_docs_locally
-
-# Deploy documentation
-make deploy_docs
+# Vérifier la connexion
+cd dbt && dbt debug
 ```
 
-## Code Quality Tools
-
-This boilerplate includes several tools to maintain code quality:
-
-- **Pre-commit hooks**: Automatically format and lint code on commit
-- **Ruff**: Fast Python linter and formatter
-- **Bandit**: Security vulnerability detection
-- **Pytest**: Testing framework
-- **nbstripout**: Clean Jupyter notebook outputs
-
-## Git Workflow
-
-1. **Pre-commit hooks** automatically format and lint your code
-2. **Tests run on push** to ensure code quality
-3. **CI pipeline** validates code on GitHub
-4. **Pull request template** helps with code reviews
-
-# Documentation
-
-## Local Development
+### 3. Lancer les transformations dbt
 
 ```bash
-# Serve documentation locally
-make serve_docs_locally
+dbt run
+dbt test
 ```
 
-This will serve the documentation at `http://localhost:8001`
+### 4. Lancer l’API
 
-## Publishing
-
-The documentation is automatically built and deployed to GitHub Pages on each push to the `main` branch.
-
-To manually deploy:
 ```bash
-make deploy_docs
+uvicorn src.app.api.main:app --reload
 ```
 
-## Configuration
+### 5. Lancer le dashboard Streamlit
 
-- **MkDocs**: Documentation generator
-- **Material for MkDocs**: Beautiful theme
-- **GitHub Pages**: Automatic deployment
-
-# Adding Dependencies
-
-## Runtime Dependencies
-
-Add to `requirements.txt`:
-```
-pandas>=2.0.0
-numpy>=1.24.0
-scikit-learn>=1.3.0
+```bash
+streamlit run src/app/dashboard/dashboard.py
 ```
 
-## Development Dependencies
+### 6. Lancer l’ensemble avec Docker
 
-Add to `pyproject.toml` under `[project.optional-dependencies]`:
-```toml
-dev = [
-    "pre-commit>=3.0.0",
-    "pytest>=7.0.0",
-    "pytest-cov>=4.0.0",
-]
+```bash
+docker compose up --build
 ```
 
-# Contributing
+## Pipeline principal
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests: `make run_tests`
-5. Format code: `make format`
-6. Submit a pull request
+1. extraction des signalements ;
+2. nettoyage et transformation ;
+3. chargement dans BigQuery ;
+4. modélisation et enrichissement via dbt ;
+5. entraînement et évaluation du modèle ;
+6. exposition des prédictions via l’API ;
+7. orchestration des flows avec Prefect ;
+8. visualisation et suivi dans Streamlit.
 
-# License
+## API
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+### Endpoints principaux
+
+- `GET /health` : vérification de l’état de l’API
+- `POST /predictions` : génération d’une prédiction
+- `GET /predictions/{id}` : récupération d’une prédiction par identifiant
+- `POST /flows` : déclenchement d’un workflow
