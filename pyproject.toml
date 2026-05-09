@@ -1,5 +1,5 @@
 [project]
-name = "Signal-Conso"
+name = "signalconso"
 version = "0.1.0"
 description = "Plateforme intelligente de traitement automatique des signalements et de priorisation des demandes clients"
 requires-python = ">=3.11,<3.13"
