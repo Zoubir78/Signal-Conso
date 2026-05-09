@@ -1,46 +1,41 @@
 name: CI
 
-on: [push, pull_request]
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - develop
 
 jobs:
-  CI:
-    name: Launching CI
+  lint-and-test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ['3.11']
 
     steps:
-      - uses: actions/checkout@v4
-      
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
 
-      - name: Install pyenv
-        run: |
-          curl https://pyenv.run | bash
-          echo "$HOME/.pyenv/bin" >> $GITHUB_PATH
-          echo "$HOME/.pyenv/shims" >> $GITHUB_PATH
+      - name: Install Poetry
+        run: pipx install poetry==2.3.2
 
-      - name: Install Python ${{ matrix.python-version }} with pyenv
-        run: |
-          pyenv install ${{ matrix.python-version }}
-          pyenv global ${{ matrix.python-version }}
+      - name: Add pipx bin to PATH
+        run: echo "$HOME/.local/bin" >> $GITHUB_PATH
 
-      - name: Setup development environment
+      - name: Show versions
         run: |
-          make setup
+          python --version
+          poetry --version
 
-      - name: Install pre-commit hooks
-        run: |
-          make install_precommit
+      - name: Install dependencies
+        run: poetry install --extras dev --no-root
 
-      - name: Run pre-commit hooks (formatting, linting & tests)
-        run: |
-          pre-commit run --all-files --hook-stage pre-push --show-diff-on-failure
+      - name: Run Ruff check
+        run: poetry run ruff check .
 
-      - name: Run tests
-        run: |
-          make run_tests
+      - name: Check Ruff formatting
+        run: poetry run ruff format --check .
