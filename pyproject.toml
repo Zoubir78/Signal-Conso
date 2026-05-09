@@ -1,39 +1,71 @@
 [project]
-name = "my-ds-project"
+name = "Signal-Conso"
 version = "0.1.0"
-description = "A boilerplate template for data science projects with pre-commit hooks and best practices"
-authors = [
-    {name = "Your Name", email = "you@example.com"}
+description = "Plateforme intelligente de traitement automatique des signalements et de priorisation des demandes clients"
+requires-python = ">=3.11,<3.13"
+
+dependencies = [
+    "dbt-core",
+    "dbt-bigquery",
+    "fastapi[standard]==0.110.0",
+    "uvicorn[standard]==0.34.0",
+    "streamlit==1.56.0",
+    "pandas>=2.2",
+    "numpy>=1.24",
+    "scikit-learn==1.5.2",
+    "joblib==1.5.2",
+    "matplotlib==3.8.0",
+    "seaborn==0.12.2",
+    "wordcloud>=1.9",
+    "plotly==5.15.0",
+    "google-api-core (>=2.30.1,<3.0.0)",
+    "google-cloud-storage==2.16.0",
+    "requests==2.31.0",
+    "python-dotenv==1.2.2",
+    "sqlalchemy>=2.0",
+    "pydantic>=2.6",
+    "redis==5.0.4"
 ]
-readme = "README.md"
-requires-python = ">=3.11"
-dynamic = ["dependencies"]
 
 [project.optional-dependencies]
 dev = [
-    "pre-commit>=3.0.0",
-    "codespell>=2.2.0",
-    "ruff>=0.1.0",
-    "bandit>=1.7.0",
-    "nbstripout>=0.6.0",
-    "pytest>=7.0.0",
-    "mkdocs>=1.5.0",
-    "mkdocs-material>=9.0.0",
-    "mkdocstrings>=0.24.0",
-    "mkdocstrings-python>=1.7.0",
-    "termynal>=0.13.0",
+    "pytest>=7.0",
+    "pytest-mock>=3.15.1",
+    "ruff>=0.4.0"
 ]
 
-[build-system]
-requires = ["setuptools>=61.0", "wheel"]
-build-backend = "setuptools.build_meta"
+[tool.setuptools.packages.find]
+where = ["src"]
 
-[tool.setuptools]
-package-dir = {"" = "src"}
-packages = ["my_ds_project"]
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+norecursedirs = [".git", ".venv", "dist", "build"]
 
-[tool.setuptools.package-data]
-"*" = ["*.md", "*.txt", "*.yaml", "*.yml"]
+[tool.ruff]
+line-length = 100
+target-version = "py311"
 
-[tool.setuptools.dynamic]
-dependencies = {file = ["requirements.txt"]}
+exclude = [
+    ".git",
+    "__pycache__",
+    ".venv",
+    "build",
+    "dist",
+    "dbt/dbt_packages",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+[dependency-groups]
+dev = [
+    "pytest (>=9.0.3,<10.0.0)"
+]
