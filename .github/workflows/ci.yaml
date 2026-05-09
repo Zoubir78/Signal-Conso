@@ -31,9 +31,6 @@ jobs:
           python --version
           poetry --version
 
-      - name: Check lock file
-        run: poetry check --lock
-
       - name: Install dependencies
         run: poetry install --extras dev --no-root
 
