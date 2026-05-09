@@ -1,87 +1,139 @@
-SHELL := /bin/bash
+# ==============================
+# VARIABLES
+# ==============================
+VENV=.venv
+PYTHON=$(VENV)/bin/python
+PIP=$(VENV)/bin/pip
+STREAMLIT=$(VENV)/bin/streamlit
+UVICORN=$(VENV)/bin/uvicorn
 
-PYTHON_VERSION := 3.11
+PROJECT=src.app.main:app
 
-# Package customization - users can override this
-PACKAGE_NAME ?= boilerplate-datascience
+# ==============================
+# ENV SETUP
+# ==============================
+venv:
+	python -m venv $(VENV)
 
-.DEFAULT_GOAL = help
+install:
+	$(PIP) install -e ".[dev]"
 
-# help: help					- Display this makefile's help information
-.PHONY: help
-help:
-	@grep "^# help\:" Makefile | grep -v grep | sed 's/\# help\: //' | sed 's/\# help\://'
+setup: venv install
+	@echo "✅ Environnement prêt"
 
-# help: customize-package			- Customize package name
-.PHONY: customize-package
-customize-package:
-	@echo "🔧 Customizing package name..."
-	@echo "Current package name: $(PACKAGE_NAME)"
-	@echo "Python module name: $(shell echo $(PACKAGE_NAME) | tr '-' '_')"
-	@echo ""
-	@echo "To customize, run:"
-	@echo "  make customize-package PACKAGE_NAME=my-awesome-project"
-	@echo ""
-	@if [ "$(PACKAGE_NAME)" != "boilerplate-datascience" ]; then \
-		echo "🔄 Updating package configuration..."; \
-		sed -i.bak 's/name = "boilerplate-datascience"/name = "$(PACKAGE_NAME)"/' pyproject.toml; \
-		sed -i.bak 's/packages = \["boilerplate_datascience"\]/packages = ["$(shell echo $(PACKAGE_NAME) | tr '-' '_')"]/' pyproject.toml; \
-		mv src/boilerplate_datascience src/$(shell echo $(PACKAGE_NAME) | tr '-' '_'); \
-		echo "✅ Package customized to: $(PACKAGE_NAME)"; \
-		echo "✅ Python module: $(shell echo $(PACKAGE_NAME) | tr '-' '_')"; \
-	else \
-		echo "ℹ️  Using default package name. Run with PACKAGE_NAME to customize."; \
-	fi
+activate:
+	@echo "source $(VENV)/bin/activate"
 
-# help: setup					- Create a virtual environment and install dependencies
-.PHONY: setup
-setup: customize-package create-venv install-dev-requirements
+clean:
+	rm -rf $(VENV) __pycache__ .pytest_cache .ruff_cache
 
-ENV_NAME := $(shell echo $(notdir $(CURDIR)) | sed 's/^[0-9]*-//' | tr '[:upper:]' '[:lower:]')
+# ==============================
+# RUN
+# ==============================
+api:
+	$(UVICORN) $(PROJECT) --reload
 
-.PHONY : create-venv, install-dev-requirements, install-requirements
-create-venv:
-	@if ! pyenv virtualenvs | grep -q $(ENV_NAME); then pyenv virtualenv $(ENV_NAME); \
-	else echo "virtualenv already exists"; fi
-	# Set virtualenv as local
-	@pyenv local $(ENV_NAME)
-	@echo "✅ Virtualenv $(ENV_NAME) created and set as local"
+dashboard:
+	$(STREAMLIT) run src/app/streamlit_dashboard.py
 
-install-dev-requirements:
-	@pip install --upgrade pip --quiet
-	@pip install -r requirements.txt
-	@pip install -e ".[dev]"
-	@echo "✅ Requirements installed"
+# ==============================
+# QUALITY (LINT + FORMAT)
+# ==============================
+lint:
+	ruff check .
 
-install-requirements:
-	@pip install --upgrade pip --quiet
-	@pip install -r requirements.txt
-	@pip install .
-	@echo "✅ Requirements installed"
-
-# help: install_precommit			- Install pre-commit hooks
-.PHONY: install_precommit
-install_precommit:
-	@pre-commit install -t pre-commit
-	@pre-commit install -t pre-push
-
-# help: format			- format code using the precommits
-.PHONY: format
 format:
-	@pre-commit run -a
+	ruff format .
 
-# help: serve_docs_locally			- Serve docs locally on port 8001
-.PHONY: serve_docs_locally
-serve_docs_locally:
-	@mkdocs serve --livereload -a localhost:8001
+sql-lint:
+	sqlfluff lint .
 
-# help: deploy_docs				- Deploy documentation to GitHub Pages
-.PHONY: deploy_docs
-deploy_docs:
-	@mkdocs build
-	@mkdocs gh-deploy
+sql-fix:
+	sqlfluff fix .
 
-# help: run_tests			- Run repository's tests
-.PHONY: run_tests
-run_tests:
-	@pytest tests/
+precommit:
+	pre-commit run --all-files
+
+# ==============================
+# TESTS
+# ==============================
+test:
+	$(PYTHON) -m pytest
+
+test-cov:
+	$(PYTHON) -m pytest --cov=src --cov-report=term-missing
+
+# ==============================
+# DBT (BigQuery)
+# ==============================
+dbt-debug:
+	cd dbt && dbt debug
+
+dbt-run:
+	cd dbt && dbt run
+
+dbt-test:
+	cd dbt && dbt test
+
+dbt-build:
+	cd dbt && dbt build
+
+# ==============================
+# GCP
+# ==============================
+gcp-auth:
+	gcloud auth application-default login
+
+gcp-project:
+	gcloud config set project $$GCP_PROJECT
+
+# ==============================
+# PIPELINE
+# ==============================
+pipeline:
+	$(PYTHON) scripts/run_pipeline.py
+
+train:
+	$(PYTHON) scripts/train_model.py
+
+predict-batch:
+	$(PYTHON) scripts/export_predictions.py
+
+# ==============================
+# FULL WORKFLOWS
+# ==============================
+run-all: setup lint test dbt-run train
+	@echo "🚀 Full pipeline exécuté"
+
+mlops: lint test dbt-build pipeline train
+	@echo "🤖 Pipeline MLOps complet OK"
+
+ci: lint test
+	@echo "✅ CI OK"
+
+# ==============================
+# DOCKER
+# ==============================
+docker-build:
+	docker compose build
+
+docker-up:
+	docker compose up
+
+docker-down:
+	docker compose down
+
+# ==============================
+# HELP
+# ==============================
+help:
+	@echo "📌 Commandes disponibles :"
+	@echo "make setup           → setup environnement"
+	@echo "make api             → lancer FastAPI"
+	@echo "make dashboard       → lancer Streamlit"
+	@echo "make lint            → lint code"
+	@echo "make test            → tests"
+	@echo "make dbt-run         → dbt run"
+	@echo "make pipeline        → run pipeline"
+	@echo "make train           → entrainement modèle"
+	@echo "make mlops           → pipeline complet"
