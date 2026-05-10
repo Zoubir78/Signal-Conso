@@ -38,8 +38,18 @@ dev = [
 where = ["src"]
 
 [tool.pytest.ini_options]
+testpaths = ["tests"]
 pythonpath = ["src"]
 norecursedirs = [".git", ".venv", "dist", "build"]
+
+[tool.poetry]
+name = "signalconso"
+version = "0.1.0"
+
+[tool.poetry.packages]
+include = [
+    { include = "app", from = "src" }
+]
 
 [tool.ruff]
 line-length = 100
