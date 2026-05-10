@@ -77,6 +77,7 @@ def upload_file_to_gcs(
                     f"Upload GCS abandonné après {max_attempts} tentatives : {local_path} → {blob_name}"
                 ) from e
 
+
 def upload_json_to_gcs(bucket_name: str, blob_name: str, data: dict) -> None:
     client = get_client()
     bucket = client.bucket(bucket_name)
@@ -86,6 +87,7 @@ def upload_json_to_gcs(bucket_name: str, blob_name: str, data: dict) -> None:
         content_type="application/json",
         retry=_RETRY,
     )
+
 
 def download_json_from_gcs(bucket_name: str, blob_name: str) -> dict | None:
     client = get_client()

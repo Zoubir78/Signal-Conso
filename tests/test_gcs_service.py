@@ -105,9 +105,12 @@ def test_upload_file_to_gcs_retries_then_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(gcs_service, "get_client", lambda: client)
     monkeypatch.setattr(gcs_service, "_MULTIPART_THRESHOLD", 1024 * 1024)
 
-    with patch("time.sleep") as sleep_mock, pytest.raises(
-        RuntimeError,
-        match="Upload GCS abandonné",
+    with (
+        patch("time.sleep") as sleep_mock,
+        pytest.raises(
+            RuntimeError,
+            match="Upload GCS abandonné",
+        ),
     ):
         gcs_service.upload_file_to_gcs(
             bucket_name="bucket",
