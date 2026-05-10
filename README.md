@@ -4,7 +4,7 @@ Plateforme intelligente de traitement automatique des signalements et de prioris
 
 ## Présentation
 
-**Signal-Conso** est une plateforme data & IA conçue pour automatiser le traitement des signalements clients.  
+**Signal-Conso** est une plateforme data & IA conçue pour automatiser le traitement des signalements clients.
 Elle permet de collecter, nettoyer, classer et prioriser les demandes, puis d’exposer les prédictions via une API et un dashboard de suivi.
 
 ## Objectifs

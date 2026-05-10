@@ -140,7 +140,7 @@ secrets/*
 .DS_Store
 
 # data files
-data/* 
+data/*
 
 # Models
 models/*.joblib
