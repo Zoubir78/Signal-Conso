@@ -1,9 +1,9 @@
 repos:
-
-  - repo: https://github.com/ruffle-rs/ruff
-    rev: v0.0.241
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.12
     hooks:
-      - id: ruff
+      - id: ruff-check
+      - id: ruff-format
 
   - repo: https://github.com/sqlfluff/sqlfluff
     rev: 4.1.0

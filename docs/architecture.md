@@ -2,35 +2,35 @@
 
 ## Vue d’ensemble
 
-Signal-Conso est une plateforme data & IA conçue pour automatiser le traitement des signalements clients, depuis leur extraction jusqu’à la visualisation des résultats.  
+Signal-Conso est une plateforme data & IA conçue pour automatiser le traitement des signalements clients, depuis leur extraction jusqu’à la visualisation des résultats.
 L’architecture s’appuie sur une chaîne de traitement orientée **data engineering**, **machine learning** et **MLOps**.
 
 ## Pipeline principal
 
 Le pipeline du projet suit les étapes suivantes :
 
-1. **Extraction des signalements**  
+1. **Extraction des signalements**
    Collecte des signalements depuis les sources amont.
 
-2. **Nettoyage et transformation**  
+2. **Nettoyage et transformation**
    Normalisation, déduplication, structuration et enrichissement initial des données.
 
-3. **Chargement dans BigQuery**  
+3. **Chargement dans BigQuery**
    Stockage des données préparées dans l’entrepôt analytique.
 
-4. **Modélisation et enrichissement via dbt**  
+4. **Modélisation et enrichissement via dbt**
    Construction des couches de données, transformation SQL et tests de qualité.
 
-5. **Entraînement et évaluation du modèle**  
+5. **Entraînement et évaluation du modèle**
    Création des features, entraînement du modèle et suivi des métriques.
 
-6. **Exposition des prédictions via l’API**  
+6. **Exposition des prédictions via l’API**
    Mise à disposition des prédictions et des scores via FastAPI.
 
-7. **Orchestration des flows avec Prefect**  
+7. **Orchestration des flows avec Prefect**
    Automatisation, planification et supervision des traitements.
 
-8. **Visualisation et suivi dans Streamlit**  
+8. **Visualisation et suivi dans Streamlit**
    Dashboard de suivi pour les indicateurs, les prédictions et l’état du pipeline.
 
 ## Architecture fonctionnelle
