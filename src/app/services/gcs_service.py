@@ -86,3 +86,32 @@ def upload_json_to_gcs(bucket_name: str, blob_name: str, data: dict) -> None:
         content_type="application/json",
         retry=_RETRY,
     )
+
+def download_json_from_gcs(bucket_name: str, blob_name: str) -> dict | None:
+    client = get_client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(blob_name)
+
+    if not blob.exists():
+        return None
+
+    return json.loads(blob.download_as_text())
+
+
+def get_latest_blob(bucket_name: str, prefix: str) -> str | None:
+    client = get_client()
+    blobs = list(client.list_blobs(bucket_name, prefix=prefix))
+    if not blobs:
+        return None
+    return max(blobs, key=lambda b: b.updated).name
+
+
+def download_blob_to_file(
+    bucket_name: str,
+    blob_name: str,
+    destination_path: str,
+) -> None:
+    client = get_client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(blob_name)
+    blob.download_to_filename(destination_path, retry=_RETRY)
