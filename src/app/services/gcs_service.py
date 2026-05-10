@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -75,3 +76,13 @@ def upload_file_to_gcs(
                 raise RuntimeError(
                     f"Upload GCS abandonné après {max_attempts} tentatives : {local_path} → {blob_name}"
                 ) from e
+
+def upload_json_to_gcs(bucket_name: str, blob_name: str, data: dict) -> None:
+    client = get_client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(blob_name)
+    blob.upload_from_string(
+        json.dumps(data, ensure_ascii=False),
+        content_type="application/json",
+        retry=_RETRY,
+    )
