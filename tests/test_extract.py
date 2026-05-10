@@ -29,7 +29,7 @@ def _make_record(i: int) -> dict:
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-@patch("app.pipeline.extract.requests.get")
+@patch("app.ingestion.extract.requests.get")
 def test_returns_dataframe(mock_get):
     """Doit retourner un DataFrame quand l'API renvoie des résultats."""
     records = [_make_record(i) for i in range(3)]
@@ -42,7 +42,7 @@ def test_returns_dataframe(mock_get):
     assert list(df.columns) == ["id", "category", "status"]
 
 
-@patch("app.pipeline.extract.requests.get")
+@patch("app.ingestion.extract.requests.get")
 def test_columns_match_api_keys(mock_get):
     """Les colonnes du DataFrame doivent correspondre aux clés des records."""
     records = [{"id": 1, "title": "spam", "score": 0.9}]
@@ -53,7 +53,7 @@ def test_columns_match_api_keys(mock_get):
     assert set(df.columns) == {"id", "title", "score"}
 
 
-@patch("app.pipeline.extract.requests.get")
+@patch("app.ingestion.extract.requests.get")
 def test_respects_limit(mock_get):
     """Ne doit pas retourner plus de lignes que `limit`."""
     # L'API renvoie 100 records par page, mais limit=5
@@ -65,7 +65,7 @@ def test_respects_limit(mock_get):
     assert len(df) == 5
 
 
-@patch("app.pipeline.extract.requests.get")
+@patch("app.ingestion.extract.requests.get")
 def test_paginates_until_limit(mock_get):
     """Doit paginer et accumuler les records jusqu'à atteindre `limit`."""
     page = [_make_record(i) for i in range(100)]
@@ -79,7 +79,7 @@ def test_paginates_until_limit(mock_get):
     assert mock_get.call_count >= 3
 
 
-@patch("app.pipeline.extract.requests.get")
+@patch("app.ingestion.extract.requests.get")
 def test_passes_correct_pagination_params(mock_get):
     """Vérifie que offset et limit sont bien transmis à l'API."""
     records = [_make_record(i) for i in range(100)]
@@ -99,7 +99,7 @@ def test_passes_correct_pagination_params(mock_get):
     assert second_call_params["offset"] == 100
 
 
-@patch("app.pipeline.extract.requests.get")
+@patch("app.ingestion.extract.requests.get")
 def test_stops_when_api_returns_empty_results(mock_get):
     """Doit s'arrêter dès que l'API retourne une liste vide."""
     records = [_make_record(i) for i in range(100)]
@@ -114,7 +114,7 @@ def test_stops_when_api_returns_empty_results(mock_get):
     assert mock_get.call_count == 2
 
 
-@patch("app.pipeline.extract.requests.get")
+@patch("app.ingestion.extract.requests.get")
 def test_returns_empty_dataframe_when_no_results(mock_get):
     """Doit retourner un DataFrame vide si l'API ne renvoie aucun record."""
     mock_get.return_value = _make_response([])
@@ -125,7 +125,7 @@ def test_returns_empty_dataframe_when_no_results(mock_get):
     assert df.empty
 
 
-@patch("app.pipeline.extract.requests.get")
+@patch("app.ingestion.extract.requests.get")
 def test_uses_60s_timeout(mock_get):
     """Le timeout doit être fixé à 60 secondes."""
     mock_get.return_value = _make_response([_make_record(0)])
@@ -141,7 +141,7 @@ def test_uses_60s_timeout(mock_get):
 # ══════════════════════════════════════════════════════════════════════════════
 
 
-@patch("app.pipeline.extract.requests.get")
+@patch("app.ingestion.extract.requests.get")
 def test_raises_on_http_error(mock_get):
     """Doit propager l'HTTPError levée par raise_for_status."""
     mock_get.return_value = _make_response([], status_code=500)
@@ -150,7 +150,7 @@ def test_raises_on_http_error(mock_get):
         extract_from_signalconso_api(API_URL, limit=10)
 
 
-@patch("app.pipeline.extract.requests.get")
+@patch("app.ingestion.extract.requests.get")
 def test_raises_on_connection_error(mock_get):
     """Doit propager une ConnectionError si l'API est inaccessible."""
     mock_get.side_effect = requests.ConnectionError("unreachable")
@@ -159,7 +159,7 @@ def test_raises_on_connection_error(mock_get):
         extract_from_signalconso_api(API_URL, limit=10)
 
 
-@patch("app.pipeline.extract.requests.get")
+@patch("app.ingestion.extract.requests.get")
 def test_raises_on_timeout(mock_get):
     """Doit propager un Timeout si l'API met trop longtemps à répondre."""
     mock_get.side_effect = requests.Timeout("timeout")
