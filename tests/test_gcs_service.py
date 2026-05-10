@@ -17,12 +17,10 @@ class FakeBlob:
         self.upload_from_filename = MagicMock()
         self.upload_from_string = MagicMock()
         self.download_to_filename = MagicMock()
+        self.download_as_text = MagicMock(return_value=self._text)
 
     def exists(self):
         return self._exists
-
-    def download_as_text(self):
-        return self._text
 
 
 class FakeBucket:
