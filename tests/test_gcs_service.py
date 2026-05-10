@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
-from src.app.services import gcs_service
+from app.services import gcs_service
 
 
 class FakeBlob:
