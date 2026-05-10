@@ -98,6 +98,14 @@ def download_json_from_gcs(bucket_name: str, blob_name: str) -> dict | None:
     return json.loads(blob.download_as_text())
 
 
+def find_prediction_in_bucket(bucket_name: str, prediction_id: str) -> dict | None:
+    client = get_client()
+    for blob in client.list_blobs(bucket_name, prefix="predictions/"):
+        if prediction_id in blob.name:
+            return json.loads(blob.download_as_text())
+    return None
+
+
 def get_latest_blob(bucket_name: str, prefix: str) -> str | None:
     client = get_client()
     blobs = list(client.list_blobs(bucket_name, prefix=prefix))
