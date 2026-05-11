@@ -186,3 +186,48 @@ def upload_dataframe_to_bigquery(
     job = client.load_table_from_dataframe(df, table_ref, job_config=job_config)
     job.result()
     print(f"Chargé {len(df)} lignes dans {table_ref}")
+
+    # ── Export GCS ───────────────────────────────────────────────────────────────
+
+
+def export_mart_to_gcs(
+    project_id: str = PROJECT_ID,
+    dataset_id: str = MART_DATASET,
+    table_id: str = MART_TABLE,
+    bucket_name: str = GCS_BUCKET,
+    file_format: str = "CSV",
+) -> str:
+    """
+    Exporte le mart dbt vers clean_complaints/processed/ dans GCS.
+    Le nom du fichier inclut la date du jour pour le partitionnement.
+
+    Args:
+        project_id: ID du projet GCP.
+        dataset_id: Dataset BigQuery source de l'export.
+        table_id: Table à exporter.
+        bucket_name: Bucket GCS cible (défaut : 'clean_complaints').
+        file_format: 'CSV' ou 'NEWLINE_DELIMITED_JSON'.
+
+    Returns:
+        URI GCS de destination.
+    """
+    client = get_client(project_id)
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    table_ref = f"{project_id}.{dataset_id}.{table_id}"
+    destination_uri = f"gs://{bucket_name}/processed/{table_id}_{today}_*.csv"
+
+    extract_job = client.extract_table(
+        table_ref,
+        destination_uri,
+        job_config=bigquery.ExtractJobConfig(
+            destination_format=(
+                bigquery.DestinationFormat.CSV
+                if file_format == "CSV"
+                else bigquery.DestinationFormat.NEWLINE_DELIMITED_JSON
+            ),
+            print_header=True,
+        ),
+    )
+    extract_job.result()
+    print(f"Export de {table_ref} -> {destination_uri} terminé")
+    return destination_uri
