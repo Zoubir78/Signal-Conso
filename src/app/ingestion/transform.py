@@ -67,6 +67,19 @@ def normalize_text(value: Any) -> str:
     return text
 
 
+def _normalize_colname(name: str) -> str:
+    return normalize_text(name).replace(" ", "_")
+
+
+def _find_actual_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    normalized_to_actual = {_normalize_colname(col): col for col in df.columns}
+    for candidate in candidates:
+        key = _normalize_colname(candidate)
+        if key in normalized_to_actual:
+            return normalized_to_actual[key]
+    return None
+
+
 def _is_missing(value: Any) -> bool:
     if value is None:
         return True
@@ -166,3 +179,26 @@ def build_clean_text(row: pd.Series, config: CleaningConfig | None = None) -> st
             unique_parts.append(part)
 
     return normalize_text(" ".join(unique_parts))
+
+
+def transform_dataframe(df: pd.DataFrame, config: CleaningConfig | None = None) -> pd.DataFrame:
+    config = config or CleaningConfig()
+    out = df.copy()
+
+    creationdate_col = _find_actual_column(out, COLUMN_ALIASES["creationdate"])
+    if creationdate_col is not None:
+        out[creationdate_col] = pd.to_datetime(out[creationdate_col], errors="coerce")
+
+    out["clean_text"] = out.apply(build_clean_text, axis=1, config=config)
+    out["token_count"] = out["clean_text"].str.split().str.len().fillna(0).astype(int)
+    out["is_valid"] = out["clean_text"].str.len() >= config.min_text_length
+
+    out = out[out["is_valid"]].copy()
+
+    source_id_col = _find_actual_column(out, COLUMN_ALIASES["source_id"])
+    if source_id_col is not None:
+        out = out.drop_duplicates(subset=[source_id_col], keep="first")
+    else:
+        out = out.drop_duplicates(keep="first")
+
+    return out.reset_index(drop=True)
