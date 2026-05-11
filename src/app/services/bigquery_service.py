@@ -9,7 +9,7 @@ from google.cloud import bigquery
 PROJECT_ID = "tri-demandes-clients"
 SOURCE_DATASET = "Complaints"
 SOURCE_TABLE = "Signal_Conso"
-MART_DATASET = "signalconso_dev_marts"  # signalconso_prod_marts en prod
+MART_DATASET = "signalconso_dev_marts"
 MART_TABLE = "mart_signalconso"
 GCS_BUCKET = "clean_complaints"
 
