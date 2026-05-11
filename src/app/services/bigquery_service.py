@@ -231,3 +231,35 @@ def export_mart_to_gcs(
     extract_job.result()
     print(f"Export de {table_ref} -> {destination_uri} terminé")
     return destination_uri
+
+
+# ── Alias conservé pour rétrocompatibilité ───────────────────────────────────
+
+
+def export_table_to_gcs(
+    project_id: str,
+    dataset_id: str,
+    table_id: str,
+    bucket_name: str,
+    blob_prefix: str,
+    file_format: str = "CSV",
+) -> None:
+    """Alias maintenu pour compatibilité avec l'ancien run_pipeline.py."""
+    client = get_client(project_id)
+    table_ref = f"{project_id}.{dataset_id}.{table_id}"
+    destination_uri = f"gs://{bucket_name}/{blob_prefix}_*.csv"
+
+    extract_job = client.extract_table(
+        table_ref,
+        destination_uri,
+        job_config=bigquery.ExtractJobConfig(
+            destination_format=(
+                bigquery.DestinationFormat.CSV
+                if file_format == "CSV"
+                else bigquery.DestinationFormat.NEWLINE_DELIMITED_JSON
+            ),
+            print_header=True,
+        ),
+    )
+    extract_job.result()
+    print(f"Export de {table_ref} -> {destination_uri} terminé")
