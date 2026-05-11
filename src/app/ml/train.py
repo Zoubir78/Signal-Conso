@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+import joblib
 import pandas as pd
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression, SGDClassifier
+from sklearn.metrics import accuracy_score, classification_report, f1_score
 from sklearn.model_selection import train_test_split
 from sklearn.naive_bayes import ComplementNB
 from sklearn.pipeline import Pipeline
@@ -148,3 +151,30 @@ def train_model(
         random_state=random_state,
         stratify=df[label_col],
     )
+
+    # ── Entraînement ─────────────────────────────────────────────────────────
+    model = build_pipeline(model_name)
+    model.fit(X_train, y_train)
+
+    # ── Évaluation ───────────────────────────────────────────────────────────
+    y_pred = model.predict(X_test)
+    accuracy = accuracy_score(y_test, y_pred)
+    f1_macro = f1_score(y_test, y_pred, average="macro", zero_division=0)
+    f1_weighted = f1_score(y_test, y_pred, average="weighted", zero_division=0)
+    report = classification_report(y_test, y_pred, output_dict=True, zero_division=0)
+
+    # ── Sérialisation ─────────────────────────────────────────────────────────
+    Path(model_path).parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(model, model_path)
+
+    return {
+        "model_name": model_name,
+        "accuracy": accuracy,
+        "f1_macro": f1_macro,
+        "f1_weighted": f1_weighted,
+        "n_classes": len(valid_classes),
+        "n_train": len(X_train),
+        "n_test": len(X_test),
+        "report": report,
+        "model_path": model_path,
+    }
