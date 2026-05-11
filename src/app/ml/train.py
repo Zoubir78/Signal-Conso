@@ -4,8 +4,10 @@ from typing import Any
 
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression, SGDClassifier
 from sklearn.naive_bayes import ComplementNB
+from sklearn.pipeline import Pipeline
 from sklearn.svm import LinearSVC
 
 # ── Catalogue des modèles disponibles ────────────────────────────────────────
@@ -46,3 +48,37 @@ AVAILABLE_MODELS: dict[str, Any] = {
         random_state=42,
     ),
 }
+
+
+def _tfidf() -> TfidfVectorizer:
+    """Retourne un TfidfVectorizer partagé par tous les pipelines."""
+    return TfidfVectorizer(
+        max_features=50_000,
+        ngram_range=(1, 2),
+        sublinear_tf=True,
+        min_df=2,
+        strip_accents="unicode",
+    )
+
+
+def build_pipeline(model_name: str) -> Pipeline:
+    """
+    Construit le pipeline sklearn : TF-IDF → classificateur.
+
+    Args:
+        model_name: Clé dans AVAILABLE_MODELS.
+
+    Returns:
+        Pipeline sklearn non entraîné.
+
+    Raises:
+        ValueError: Si model_name est inconnu.
+    """
+    if model_name not in AVAILABLE_MODELS:
+        raise ValueError(f"Modèle inconnu : '{model_name}'. Disponibles : {list(AVAILABLE_MODELS)}")
+    return Pipeline(
+        [
+            ("tfidf", _tfidf()),
+            ("clf", AVAILABLE_MODELS[model_name]),
+        ]
+    )
