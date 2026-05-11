@@ -190,7 +190,7 @@ def transform_dataframe(df: pd.DataFrame, config: CleaningConfig | None = None) 
         out[creationdate_col] = pd.to_datetime(out[creationdate_col], errors="coerce")
 
     out["clean_text"] = out.apply(build_clean_text, axis=1, config=config)
-    out["token_count"] = out["clean_text"].str.split().str.len().fillna(0).astype(int)
+    out["token_count"] = out["clean_text"].astype(str).str.split().str.len().fillna(0).astype(int)
     out["is_valid"] = out["clean_text"].str.len() >= config.min_text_length
 
     out = out[out["is_valid"]].copy()
