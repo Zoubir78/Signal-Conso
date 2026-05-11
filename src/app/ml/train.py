@@ -178,3 +178,11 @@ def train_model(
         "report": report,
         "model_path": model_path,
     }
+
+
+def load_model(model_path: str = "models/model.joblib") -> Pipeline:
+    """Charge un modèle sérialisé depuis le disque."""
+    path = Path(model_path)
+    if not path.exists():
+        raise FileNotFoundError(f"Modèle introuvable : {model_path}")
+    return joblib.load(path)
