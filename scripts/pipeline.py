@@ -11,8 +11,8 @@ from tempfile import TemporaryDirectory
 from app.core.config import get_settings
 from app.ingestion.extract import extract_from_signalconso_api
 from app.ml.train import AVAILABLE_MODELS, train_model
-from app.services.bigquery_service import read_mart_table
-from app.services.gcs_service import upload_file_to_gcs
+from app.services.bigquery_service import export_mart_to_gcs, read_mart_table
+from app.services.gcs_service import upload_file_to_gcs, upload_json_to_gcs
 
 API_URL = "https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/signalconso/records"
 GCS_RAW_PREFIX = "raw/"
@@ -225,8 +225,89 @@ def run_pipeline(log) -> dict:
     _print_leaderboard(all_results, log)
 
     best = all_results[0]
-
+    top2 = all_results[:2]
     log(
         f"🏆 Meilleur modèle : {best['model_name']} "
         f"(accuracy={best['accuracy']:.2%} · f1-macro={best.get('f1_macro', 0):.2%})"
     )
+
+    # ── ⑦ UPLOAD ARTEFACTS ────────────────────────────────────────────────────
+    log("📤 Upload des artefacts vers GCS...")
+
+    # Top-2 modèles versionnés
+    for r in top2:
+        local = models_dir / f"{r['model_name']}.joblib"
+        if local.exists():
+            try:
+                upload_file_to_gcs(
+                    settings.GCS_BUCKET_NAME,
+                    str(local),
+                    f"models/runs/{today}/{r['model_name']}.joblib",
+                )
+                log(f"  ✔ {r['model_name']}.joblib uploadé")
+            except Exception as e:
+                log(f"  ⚠ Upload {r['model_name']} échoué : {e}")
+
+    # Meilleur modèle → latest
+    best_local = models_dir / f"{best['model_name']}.joblib"
+    for dest in ["models/model.joblib", f"models/model_{today}.joblib"]:
+        try:
+            upload_file_to_gcs(settings.GCS_BUCKET_NAME, str(best_local), dest)
+        except Exception as e:
+            log(f"  ⚠ Upload latest échoué ({dest}) : {e}")
+    log("  ✔ Best model → models/model.joblib")
+
+    # Rapport JSON (lu par le dashboard)
+    report = {
+        "date": today,
+        "best_model": best["model_name"],
+        "leaderboard": [
+            {
+                "model": r["model_name"],
+                "accuracy": round(r["accuracy"], 4),
+                "f1_macro": round(r.get("f1_macro", 0), 4),
+                "n_train": r.get("n_train", 0),
+                "n_test": r.get("n_test", 0),
+            }
+            for r in all_results
+        ],
+    }
+    for dest in [
+        f"models/runs/{today}/evaluation_report.json",
+        "models/evaluation_report.json",
+    ]:
+        try:
+            upload_json_to_gcs(settings.GCS_BUCKET_NAME, dest, report)
+        except Exception as e:
+            log(f"  ⚠ Upload rapport JSON échoué : {e}")
+    log("  ✔ Rapport JSON uploadé")
+
+    # Export mart → processed/
+    try:
+        export_mart_to_gcs(
+            project_id=settings.GCP_PROJECT_ID,
+            bucket_name=settings.GCS_BUCKET_NAME,
+        )
+        log("  ✔ Mart exporté → processed/")
+    except Exception as e:
+        log(f"  ⚠ Export mart échoué : {e}")
+
+    log("🏁 Pipeline terminé avec succès")
+
+    return {
+        "raw_rows": len(raw_df),
+        "mart_rows": len(mart_df),
+        "best_model": best["model_name"],
+        "accuracy": best["accuracy"],
+        "f1_macro": best.get("f1_macro"),
+        "n_classes": best.get("n_classes"),
+        "leaderboard": report["leaderboard"],
+        "date": today,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CLI
+# ─────────────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    run_pipeline(log=print)
