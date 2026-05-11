@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
+import pandas as pd
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression, SGDClassifier
+from sklearn.model_selection import train_test_split
 from sklearn.naive_bayes import ComplementNB
 from sklearn.pipeline import Pipeline
 from sklearn.svm import LinearSVC
@@ -81,4 +83,68 @@ def build_pipeline(model_name: str) -> Pipeline:
             ("tfidf", _tfidf()),
             ("clf", AVAILABLE_MODELS[model_name]),
         ]
+    )
+
+
+def train_model(
+    df: pd.DataFrame | None = None,
+    data_path: str | None = None,
+    text_col: str = "clean_text",
+    label_col: str = "category",
+    model_name: str = "logreg",
+    model_path: str = "models/model.joblib",
+    test_size: float = 0.2,
+    random_state: int = 42,
+    min_class_samples: int = 5,
+) -> dict[str, Any]:
+    """
+    Entraîne un pipeline TF-IDF + classificateur et le sérialise.
+
+    Accepte un DataFrame (depuis dbt/BigQuery) ou un chemin CSV (legacy).
+
+    Args:
+        df:                 DataFrame avec colonnes text_col et label_col.
+        data_path:          Chemin CSV alternatif si df est None.
+        text_col:           Colonne de features (défaut : 'clean_text').
+        label_col:          Colonne cible (défaut : 'category').
+        model_name:         Clé dans AVAILABLE_MODELS (défaut : 'logreg').
+        model_path:         Chemin de sauvegarde du modèle sérialisé.
+        test_size:          Proportion jeu de test.
+        random_state:       Graine aléatoire.
+        min_class_samples:  Supprime les classes avec moins de N exemples.
+
+    Returns:
+        dict : model_name, accuracy, f1_macro, n_classes, n_train, n_test, report.
+    """
+    # ── Chargement ──────────────────────────────────────────────────────────
+    if df is None:
+        if data_path is None:
+            raise ValueError("Fournir 'df' ou 'data_path'.")
+        df = pd.read_csv(data_path)
+
+    for col in [text_col, label_col]:
+        if col not in df.columns:
+            raise ValueError(f"Colonne absente : '{col}'")
+
+    # ── Nettoyage ────────────────────────────────────────────────────────────
+    df = df[[text_col, label_col]].dropna()
+    df = df[df[text_col].str.strip().str.len() > 0]
+
+    class_counts = df[label_col].value_counts()
+    valid_classes = class_counts[class_counts >= min_class_samples].index
+    dropped = class_counts[class_counts < min_class_samples]
+    if not dropped.empty:
+        print(f"  Classes supprimées (< {min_class_samples} ex.) : {dropped.to_dict()}")
+    df = df[df[label_col].isin(valid_classes)].reset_index(drop=True)
+
+    if len(df) < 50:
+        raise ValueError(f"Jeu de données trop petit : {len(df)} lignes.")
+
+    # ── Split ────────────────────────────────────────────────────────────────
+    X_train, X_test, y_train, y_test = train_test_split(
+        df[text_col],
+        df[label_col],
+        test_size=test_size,
+        random_state=random_state,
+        stratify=df[label_col],
     )
