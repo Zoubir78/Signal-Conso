@@ -186,3 +186,19 @@ def load_model(model_path: str = "models/model.joblib") -> Pipeline:
     if not path.exists():
         raise FileNotFoundError(f"Modèle introuvable : {model_path}")
     return joblib.load(path)
+
+
+def predict(texts: list[str], model_path: str = "models/model.joblib") -> list[dict]:
+    """
+    Prédit la catégorie et la probabilité maximale pour une liste de textes.
+
+    Returns:
+        [{"category": ..., "confidence": ...}, ...]
+    """
+    model = load_model(model_path)
+    preds = model.predict(texts)
+    probas = model.predict_proba(texts).max(axis=1)
+    return [
+        {"category": cat, "confidence": round(float(prob), 4)}
+        for cat, prob in zip(preds, probas, strict=False)
+    ]
