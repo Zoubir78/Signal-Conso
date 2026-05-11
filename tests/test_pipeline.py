@@ -77,12 +77,12 @@ def test_find_dbt_venv(monkeypatch):
     monkeypatch.setattr("scripts.pipeline.sys.platform", "linux")
 
     def fake_exists(self):
-        p = str(self).replace("\\", "/")
-        return p == "/venv/bin/dbt"
+        return str(self).replace("\\", "/") == "/venv/bin/dbt"
 
     monkeypatch.setattr("scripts.pipeline.Path.exists", fake_exists)
 
-    assert _find_dbt() == "/venv/bin/dbt"
+    result = _find_dbt()
+    assert str(result).replace("\\", "/") == "/venv/bin/dbt"
 
 
 def test_find_dbt_system_path(monkeypatch):
