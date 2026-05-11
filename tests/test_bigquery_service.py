@@ -1,5 +1,4 @@
 import json
-from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -73,9 +72,11 @@ def test_align_to_bq_schema():
     assert aligned_df["id"].dtype == "Int64"
     assert isinstance(aligned_df["tags"].iloc[0], str)
     assert json.loads(aligned_df["tags"].iloc[0]) == ["a", "b"]
-    assert (
-        isinstance(aligned_df["created_at"].iloc[0], (pd.Timestamp, datetime)).date == "2023-01-01"
-    )
+
+    # On récupère la valeur pour tester son type et sa valeur
+    val_date = aligned_df["created_at"].iloc[0]
+    # Dans votre service, le cast DATE renvoie des objets datetime.date (via .dt.date)
+    assert str(val_date) == "2023-01-01"
 
 
 # --- Tests de l'upload ---
