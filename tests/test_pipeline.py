@@ -12,6 +12,7 @@ import pytest
 from scripts.pipeline import (
     DBT_EXECUTABLE,
     DBT_PROFILES_DIR,
+    DBT_PROJECT_DIR,
     DBT_TARGET,
     MODELS_TO_TRAIN,
     _find_dbt,
@@ -76,7 +77,8 @@ def test_find_dbt_venv(monkeypatch):
     monkeypatch.setattr("scripts.pipeline.sys.platform", "linux")
 
     def fake_exists(self):
-        return str(self) == "/venv/bin/dbt"
+        p = str(self).replace("\\", "/")
+        return p == "/venv/bin/dbt"
 
     monkeypatch.setattr("scripts.pipeline.Path.exists", fake_exists)
 
@@ -89,7 +91,8 @@ def test_find_dbt_system_path(monkeypatch):
     monkeypatch.setattr("scripts.pipeline.sys.platform", "linux")
 
     def fake_exists(self):
-        return False
+        p = str(self).replace("\\", "/")
+        return p == "/usr/bin/dbt"
 
     monkeypatch.setattr("scripts.pipeline.Path.exists", fake_exists)
 
@@ -102,7 +105,8 @@ def test_find_dbt_fallback_docker(monkeypatch):
     monkeypatch.setattr("scripts.pipeline.sys.platform", "linux")
 
     def fake_exists(self):
-        return str(self) == "/usr/local/bin/dbt"
+        p = str(self).replace("\\", "/")
+        return p in {"/usr/local/bin/dbt", "/usr/bin/dbt"}
 
     monkeypatch.setattr("scripts.pipeline.Path.exists", fake_exists)
 
@@ -138,11 +142,11 @@ def test_run_dbt_success(monkeypatch):
     assert cmd[1] == "run"
     assert "--target" in cmd
     assert cmd[cmd.index("--target") + 1] == "dev"
-    assert kwargs["cwd"] == str(Path(__file__).resolve().parents[2] / "dbt")
+    assert kwargs["cwd"] == str(DBT_PROJECT_DIR.resolve())
     assert kwargs["env"]["DBT_PROFILES_DIR"] == DBT_PROFILES_DIR
     log.assert_any_call(f"  ▶ Exécutable : {DBT_EXECUTABLE}")
     log.assert_any_call(f"  ▶ Profiles   : {DBT_PROFILES_DIR}")
-    log.assert_any_call("  ▶ Project    : " + str(Path(__file__).resolve().parents[2] / "dbt"))
+    log.assert_any_call("  ▶ Project    : " + str(DBT_PROJECT_DIR.resolve()))
 
 
 def test_run_dbt_failure(monkeypatch):
