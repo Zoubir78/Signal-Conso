@@ -1,5 +1,9 @@
 from fastapi import FastAPI
 
+from app.api.routes.health import router as health_router
+from app.api.routes.predictions import router as predictions_router
+from app.api.routes.tickets import router as tickets_router
+
 app = FastAPI(
     title="Signal Conso API",
     version="0.1.0",
@@ -8,6 +12,10 @@ app = FastAPI(
         "et orchestration des flows Prefect KPI."
     ),
 )
+
+app.include_router(health_router)
+app.include_router(tickets_router, prefix="/tickets", tags=["tickets"])
+app.include_router(predictions_router, prefix="/predictions", tags=["predictions"])
 
 
 @app.get("/", tags=["root"])

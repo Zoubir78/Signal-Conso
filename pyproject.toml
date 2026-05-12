@@ -24,7 +24,8 @@ dependencies = [
     "python-dotenv==1.2.2",
     "sqlalchemy>=2.0",
     "pydantic>=2.6",
-    "redis==5.0.4"
+    "redis==5.0.4",
+    "httpx (<0.28)"
 ]
 
 [project.optional-dependencies]

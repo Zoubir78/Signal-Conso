@@ -13,11 +13,14 @@ from app.services.gcs_service import find_prediction_in_bucket, upload_json_to_g
 router = APIRouter()
 
 settings = get_settings()
-
 model = TicketModel(settings.MODEL_PATH)
-model.load()
-
 MODEL_VERSION = settings.MODEL_VERSION
+
+
+def get_model() -> TicketModel:
+    if model.model is None:
+        model.load()
+    return model
 
 
 # --------- CREATE PREDICTION ---------
@@ -27,10 +30,10 @@ def create_prediction(request: PredictionRequest):
         prediction_id = str(uuid4())
 
         clean_text = normalize_text(request.text)
-        prediction, confidence = model.predict_with_proba(request.text)
+        loaded_model = get_model()
+        prediction, confidence = loaded_model.predict_with_proba(request.text)
 
         now = datetime.utcnow()
-
         blob_path = f"predictions/{now.year}/{now.month:02d}/{now.day:02d}/{prediction_id}.json"
 
         data = {
@@ -42,7 +45,7 @@ def create_prediction(request: PredictionRequest):
             "model_version": MODEL_VERSION,
             "created_at": now.isoformat(),
         }
-        # Sauvegarde dans GCS
+
         upload_json_to_gcs(
             bucket_name=settings.GCS_BUCKET_NAME,
             blob_name=blob_path,
@@ -51,6 +54,8 @@ def create_prediction(request: PredictionRequest):
 
         return PredictionResponse(**data)
 
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
