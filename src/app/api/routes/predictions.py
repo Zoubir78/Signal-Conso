@@ -1,0 +1,55 @@
+from __future__ import annotations
+
+from datetime import datetime
+from uuid import uuid4
+
+from fastapi import APIRouter, HTTPException
+
+from app.api.schemas.prediction import PredictionRequest, PredictionResponse
+from app.core.config import get_settings
+from app.ml.predict import TicketModel, normalize_text
+from app.services.gcs_service import upload_json_to_gcs
+
+router = APIRouter()
+
+settings = get_settings()
+
+model = TicketModel(settings.MODEL_PATH)
+model.load()
+
+MODEL_VERSION = settings.MODEL_VERSION
+
+
+# --------- CREATE PREDICTION ---------
+@router.post("", response_model=PredictionResponse)
+def create_prediction(request: PredictionRequest):
+    try:
+        prediction_id = str(uuid4())
+
+        clean_text = normalize_text(request.text)
+        prediction, confidence = model.predict_with_proba(request.text)
+
+        now = datetime.utcnow()
+
+        blob_path = f"predictions/{now.year}/{now.month:02d}/{now.day:02d}/{prediction_id}.json"
+
+        data = {
+            "id": prediction_id,
+            "input_text": request.text,
+            "clean_text": clean_text,
+            "predicted_category": prediction,
+            "confidence": float(confidence),
+            "model_version": MODEL_VERSION,
+            "created_at": now.isoformat(),
+        }
+        # Sauvegarde dans GCS
+        upload_json_to_gcs(
+            bucket_name=settings.GCS_BUCKET_NAME,
+            blob_name=blob_path,
+            data=data,
+        )
+
+        return PredictionResponse(**data)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
