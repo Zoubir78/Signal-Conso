@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 from app.api.schemas.prediction import PredictionRequest, PredictionResponse
 from app.core.config import get_settings
 from app.ml.predict import TicketModel, normalize_text
-from app.services.gcs_service import upload_json_to_gcs
+from app.services.gcs_service import find_prediction_in_bucket, upload_json_to_gcs
 
 router = APIRouter()
 
@@ -53,3 +53,17 @@ def create_prediction(request: PredictionRequest):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+# --------- GET PREDICTION ---------
+@router.get("/{prediction_id}", response_model=PredictionResponse)
+def get_prediction(prediction_id: str):
+    data = find_prediction_in_bucket(
+        bucket_name=settings.GCS_BUCKET_NAME,
+        prediction_id=prediction_id,
+    )
+
+    if data is None:
+        raise HTTPException(status_code=404, detail="Prédiction introuvable")
+
+    return PredictionResponse(**data)
