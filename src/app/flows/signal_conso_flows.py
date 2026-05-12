@@ -18,9 +18,13 @@ Usage :
 from __future__ import annotations
 
 import os
+from datetime import datetime
+from io import BytesIO
+from typing import Any
 
-from prefect import task
-from prefect_gcp import GcpCredentials
+import pandas as pd
+from google.cloud import storage
+from prefect import get_run_logger, task
 
 # -- Config --------------------------------------------------------------------
 GCS_BUCKET_NAME: str = os.getenv("GCS_BUCKET_NAME", "clean_complaints")
@@ -29,15 +33,139 @@ GCS_RESULTS_PREFIX: str = os.getenv("GCS_RESULTS_PREFIX", "prefect-results/")
 BOOL_TRUE_VALUES: frozenset[str] = frozenset({"1", "true", "t", "yes", "y", "oui", "vrai", "on"})
 
 
-@task
-def get_gcs_client_task():
-    # Charge les credentials de manière sécurisée depuis Prefect Cloud
-    gcp_credentials_block = GcpCredentials.load("my-gcp-creds")
-
-    # Retourne directement un client storage.Client() authentifié !
-    return gcp_credentials_block.get_cloud_storage_client()
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
+
+
+def _is_missing(value: Any) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, float) and pd.isna(value):
+        return True
+    return bool(isinstance(value, str) and not value.strip())
+
+
+def _to_bool(value: Any) -> bool:
+    if _is_missing(value):
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in BOOL_TRUE_VALUES
+
+
+def _bool_series(series: pd.Series) -> pd.Series:
+    return series.apply(_to_bool)
+
+
+def _now_iso() -> str:
+    """Heure UTC courante en ISO 8601 (datetime.utcnow() deprecie en Python 3.12)."""
+    return datetime.now(datetime.UTC).isoformat()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TASKS GCS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@task(
+    name="get-gcs-client",
+    description="Initialise le client Google Cloud Storage.",
+    retries=2,
+    retry_delay_seconds=5,
+    tags=["gcs", "infra"],
+    persist_result=False,
+)
+def get_gcs_client_task() -> storage.Client:
+    logger = get_run_logger()
+    logger.info("Initialisation du client GCS.")
+    return storage.Client()
+
+
+@task(
+    name="find-latest-blob",
+    description="Trouve le blob le plus recent dans le prefix GCS.",
+    retries=3,
+    retry_delay_seconds=10,
+    tags=["gcs", "extract"],
+)
+def find_latest_blob_task(client: storage.Client, bucket_name: str, prefix: str) -> str | None:
+    logger = get_run_logger()
+    logger.info(f"Recherche du blob le plus recent dans gs://{bucket_name}/{prefix}")
+
+    bucket = client.bucket(bucket_name)
+    blobs = list(bucket.list_blobs(prefix=prefix))
+
+    if not blobs:
+        logger.warning(f"Aucun blob trouve dans gs://{bucket_name}/{prefix}")
+        return None
+
+    fallback_dt = datetime.min.replace(tzinfo=datetime.UTC)
+    latest = max(blobs, key=lambda b: b.updated or fallback_dt)
+    logger.info(f"Blob le plus recent : {latest.name} (mis a jour le {latest.updated})")
+    return latest.name
+
+
+@task(
+    name="download-dataset",
+    description="Telecharge le dataset CSV depuis GCS et le charge en DataFrame.",
+    retries=3,
+    retry_delay_seconds=15,
+    tags=["gcs", "extract"],
+    persist_result=False,
+)
+def download_dataset_task(client: storage.Client, bucket_name: str, blob_name: str) -> pd.DataFrame:
+    logger = get_run_logger()
+    logger.info(f"Telechargement de gs://{bucket_name}/{blob_name}")
+
+    blob = client.bucket(bucket_name).blob(blob_name)
+    data = blob.download_as_bytes()
+    df = pd.read_csv(BytesIO(data))
+
+    logger.info(f"Dataset charge : {len(df)} lignes x {len(df.columns)} colonnes")
+    return df
+
+
+@task(
+    name="preprocess-dataframe",
+    description="Normalise les types (dates, booleens) du DataFrame brut.",
+    tags=["transform"],
+    persist_result=False,
+)
+def preprocess_task(df: pd.DataFrame) -> pd.DataFrame:
+    logger = get_run_logger()
+
+    if "creationdate" in df.columns:
+        df["creationdate"] = pd.to_datetime(df["creationdate"], errors="coerce")
+        logger.info("Colonne 'creationdate' convertie en datetime.")
+
+    for bool_col in ["signalement_transmis", "signalement_lu", "signalement_reponse"]:
+        if bool_col in df.columns:
+            df[bool_col] = _bool_series(df[bool_col])
+
+    if "department_label" not in df.columns and (
+        "dep_code" in df.columns or "dep_name" in df.columns
+    ):
+
+        def _dept_label(row: pd.Series) -> str:
+            parts: list[str] = []
+            if "dep_code" in row.index and not _is_missing(row.get("dep_code")):
+                code = str(row.get("dep_code")).strip().replace(".0", "")
+                if code.isdigit() and len(code) <= 2:
+                    code = code.zfill(2)
+                parts.append(code)
+            if "dep_name" in row.index and not _is_missing(row.get("dep_name")):
+                parts.append(str(row.get("dep_name")).strip())
+            if not parts:
+                return "Inconnu"
+            return " – ".join(parts)
+
+        df["department_label"] = df.apply(_dept_label, axis=1)
+        logger.info("Colonne 'department_label' créée pour harmoniser le filtrage département.")
+    elif "department_label" in df.columns:
+        df["department_label"] = df["department_label"].astype(str).str.strip()
+
+    logger.info("Pre-traitement termine.")
+    return df
