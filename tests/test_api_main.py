@@ -11,3 +11,11 @@ def test_root_endpoint():
     assert response.json() == {
         "message": "Bienvenue sur la plateforme intelligente de Signal Conso !"
     }
+
+
+def test_openapi_title():
+    with TestClient(app) as client:
+        response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    assert response.json()["info"]["title"] == "Signal Conso API"
