@@ -68,3 +68,15 @@ class TicketModel:
             raise ValueError("Le texte d'entrée est vide ou invalide.")
 
         return self.model.predict([clean_text])[0]
+
+    def predict_many(self, texts: list[str]) -> list[str]:
+        if self.model is None:
+            self.load()
+
+        clean_texts = [normalize_text(text) for text in texts]
+        clean_texts = [text for text in clean_texts if text]
+
+        if not clean_texts:
+            raise ValueError("Aucun texte valide à prédire.")
+
+        return list(self.model.predict(clean_texts))
