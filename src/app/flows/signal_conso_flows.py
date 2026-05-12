@@ -18,7 +18,7 @@ Usage :
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from io import BytesIO
 from typing import Any
 
@@ -168,4 +168,69 @@ def preprocess_task(df: pd.DataFrame) -> pd.DataFrame:
         df["department_label"] = df["department_label"].astype(str).str.strip()
 
     logger.info("Pre-traitement termine.")
+    return df
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TASKS FILTRAGE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@task(
+    name="apply-temporal-filter",
+    description="Filtre le DataFrame sur une période temporelle.",
+    tags=["filter"],
+)
+def apply_temporal_filter_task(
+    df: pd.DataFrame,
+    reference_date: date | None = None,
+    period: str = "Depuis le début du mois",
+) -> pd.DataFrame:
+    logger = get_run_logger()
+
+    if "creationdate" not in df.columns:
+        logger.warning("Colonne 'creationdate' absente — pas de filtre temporel.")
+        return df
+
+    ref = reference_date or date.today()
+    df = df[df["creationdate"].notna()].copy()
+
+    if period == "Depuis le début du mois":
+        start = ref.replace(day=1)
+        end = ref
+    elif period == "7 derniers jours":
+        start = ref - timedelta(days=6)
+        end = ref
+    else:
+        logger.info("Période = 'Toutes les données' — pas de filtre temporel.")
+        return df
+
+    filtered = df[(df["creationdate"].dt.date >= start) & (df["creationdate"].dt.date <= end)]
+
+    logger.info(f"Filtre temporel [{start} → {end}] : {len(df)} → {len(filtered)} lignes.")
+    return filtered
+
+
+@task(
+    name="apply-geo-filter",
+    description="Filtre le DataFrame par région et/ou département.",
+    tags=["filter"],
+)
+def apply_geo_filter_task(
+    df: pd.DataFrame,
+    region: str | None = None,
+    department_label: str | None = None,
+) -> pd.DataFrame:
+    logger = get_run_logger()
+
+    if region and "reg_name" in df.columns:
+        before = len(df)
+        df = df[df["reg_name"].astype(str) == region]
+        logger.info(f"Filtre région '{region}' : {before} → {len(df)} lignes.")
+
+    if department_label and "department_label" in df.columns:
+        before = len(df)
+        df = df[df["department_label"].astype(str) == department_label]
+        logger.info(f"Filtre département '{department_label}' : {before} → {len(df)} lignes.")
+
     return df
