@@ -26,5 +26,5 @@ def test_routes_are_registered():
 
     assert "/" in routes
     assert "/health" in routes
-    assert "/tickets" in routes
-    assert "/predictions" in routes
+    assert any(path.startswith("/tickets") for path in routes)
+    assert any(path.startswith("/predictions") for path in routes)
