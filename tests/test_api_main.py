@@ -2,11 +2,10 @@ from fastapi.testclient import TestClient
 
 from app.api.main import app
 
-client = TestClient(app)
-
 
 def test_root_endpoint():
-    response = client.get("/")
+    with TestClient(app) as client:
+        response = client.get("/")
 
     assert response.status_code == 200
     assert response.json() == {
@@ -15,7 +14,8 @@ def test_root_endpoint():
 
 
 def test_openapi_title():
-    response = client.get("/openapi.json")
+    with TestClient(app) as client:
+        response = client.get("/openapi.json")
 
     assert response.status_code == 200
     assert response.json()["info"]["title"] == "Signal Conso API"
