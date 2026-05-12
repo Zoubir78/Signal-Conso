@@ -25,7 +25,7 @@ from typing import Any
 
 import pandas as pd
 from google.cloud import storage
-from prefect import get_run_logger, task
+from prefect import flow, get_run_logger, task
 from prefect.artifacts import create_table_artifact
 from prefect.runtime import deployment as prefect_runtime_deployment
 
@@ -448,3 +448,59 @@ def publish_kpi_results_task(kpis: list[dict[str, Any]], source_blob: str) -> di
 
     logger.info(f"KPIs publiés : {[k.get('kpi', '?') for k in kpis]}")
     return summary
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SOUS-FLOWS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@flow(
+    name="flow-nombre-signalements",
+    description="Flow dédié au KPI : Nombre total de signalements.",
+    log_prints=True,
+)
+def flow_nombre_signalements(df: pd.DataFrame) -> dict[str, Any]:
+    return kpi_nombre_signalements_task(df)
+
+
+@flow(
+    name="flow-transmis-global",
+    description="Flow dédié aux KPI : signalements transmis / transmis lus.",
+    log_prints=True,
+)
+def flow_transmis_global(
+    df: pd.DataFrame,
+    kpi_type: str = "both",
+) -> dict[str, Any] | list[dict[str, Any]]:
+    """
+    kpi_type:
+      - "transmis"      -> calcule seulement le taux transmis
+      - "transmis_lus"  -> calcule seulement le taux transmis lus
+      - "both"          -> calcule les deux KPI
+    """
+    logger = get_run_logger()
+
+    if kpi_type == "transmis":
+        return kpi_signalements_transmis_task(df)
+
+    if kpi_type == "transmis_lus":
+        return kpi_signalements_transmis_lus_task(df)
+
+    if kpi_type == "both":
+        logger.info("Calcul des KPI 'transmis' et 'transmis_lus'.")
+        return [
+            kpi_signalements_transmis_task(df),
+            kpi_signalements_transmis_lus_task(df),
+        ]
+
+    raise ValueError(f"Valeur de kpi_type invalide : {kpi_type!r}")
+
+
+@flow(
+    name="flow-signalements-lus-reponse",
+    description="Flow dédié au KPI : Part des signalements lus ayant une réponse.",
+    log_prints=True,
+)
+def flow_signalements_lus_reponse(df: pd.DataFrame) -> dict[str, Any]:
+    return kpi_signalements_lus_reponse_task(df)
