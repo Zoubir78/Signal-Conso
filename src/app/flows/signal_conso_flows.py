@@ -18,7 +18,7 @@ Usage :
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from io import BytesIO
 from typing import Any
 
@@ -169,3 +169,199 @@ def preprocess_task(df: pd.DataFrame) -> pd.DataFrame:
 
     logger.info("Pre-traitement termine.")
     return df
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TASKS FILTRAGE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@task(
+    name="apply-temporal-filter",
+    description="Filtre le DataFrame sur une période temporelle.",
+    tags=["filter"],
+)
+def apply_temporal_filter_task(
+    df: pd.DataFrame,
+    reference_date: date | None = None,
+    period: str = "Depuis le début du mois",
+) -> pd.DataFrame:
+    logger = get_run_logger()
+
+    if "creationdate" not in df.columns:
+        logger.warning("Colonne 'creationdate' absente — pas de filtre temporel.")
+        return df
+
+    ref = reference_date or date.today()
+    df = df[df["creationdate"].notna()].copy()
+
+    if period == "Depuis le début du mois":
+        start = ref.replace(day=1)
+        end = ref
+    elif period == "7 derniers jours":
+        start = ref - timedelta(days=6)
+        end = ref
+    else:
+        logger.info("Période = 'Toutes les données' — pas de filtre temporel.")
+        return df
+
+    filtered = df[(df["creationdate"].dt.date >= start) & (df["creationdate"].dt.date <= end)]
+
+    logger.info(f"Filtre temporel [{start} → {end}] : {len(df)} → {len(filtered)} lignes.")
+    return filtered
+
+
+@task(
+    name="apply-geo-filter",
+    description="Filtre le DataFrame par région et/ou département.",
+    tags=["filter"],
+)
+def apply_geo_filter_task(
+    df: pd.DataFrame,
+    region: str | None = None,
+    department_label: str | None = None,
+) -> pd.DataFrame:
+    logger = get_run_logger()
+
+    if region and "reg_name" in df.columns:
+        before = len(df)
+        df = df[df["reg_name"].astype(str) == region]
+        logger.info(f"Filtre région '{region}' : {before} → {len(df)} lignes.")
+
+    if department_label and "department_label" in df.columns:
+        before = len(df)
+        df = df[df["department_label"].astype(str) == department_label]
+        logger.info(f"Filtre département '{department_label}' : {before} → {len(df)} lignes.")
+
+    return df
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TASKS KPI
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@task(
+    name="kpi-nombre-signalements",
+    description="Calcule le nombre total de signalements.",
+    tags=["kpi"],
+)
+def kpi_nombre_signalements_task(df: pd.DataFrame) -> dict[str, Any]:
+    logger = get_run_logger()
+    total = len(df)
+    logger.info(f"[KPI] Nombre de signalements = {total}")
+    return {
+        "kpi": "nombre_signalements",
+        "label": "Nombre de signalements",
+        "value": total,
+        "unit": "signalements",
+        "computed_at": _now_iso(),
+    }
+
+
+@task(
+    name="kpi-signalements-transmis",
+    description="Calcule la part des signalements transmis aux entreprises.",
+    tags=["kpi"],
+)
+def kpi_signalements_transmis_task(df: pd.DataFrame) -> dict[str, Any]:
+    logger = get_run_logger()
+
+    total = len(df)
+    if "signalement_transmis" not in df.columns:
+        logger.warning("Colonne 'signalement_transmis' absente.")
+        return {
+            "kpi": "signalements_transmis",
+            "label": "Part de signalements transmis",
+            "value": None,
+            "numerator": None,
+            "denominator": total,
+            "error": "Colonne manquante",
+            "computed_at": _now_iso(),
+        }
+
+    transmitted = int(df["signalement_transmis"].sum())
+    rate = transmitted / total if total else 0.0
+
+    logger.info(f"[KPI] Signalements transmis = {transmitted}/{total} = {rate:.2%}")
+    return {
+        "kpi": "signalements_transmis",
+        "label": "Part de signalements transmis",
+        "value": round(rate, 6),
+        "value_pct": f"{rate:.2%}",
+        "numerator": transmitted,
+        "denominator": total,
+        "computed_at": _now_iso(),
+    }
+
+
+@task(
+    name="kpi-signalements-transmis-lus",
+    description="Calcule la part des signalements transmis qui ont été lus.",
+    tags=["kpi"],
+)
+def kpi_signalements_transmis_lus_task(df: pd.DataFrame) -> dict[str, Any]:
+    logger = get_run_logger()
+
+    missing_cols = [c for c in ["signalement_transmis", "signalement_lu"] if c not in df.columns]
+    if missing_cols:
+        logger.warning(f"Colonnes manquantes : {missing_cols}")
+        return {
+            "kpi": "signalements_transmis_lus",
+            "label": "Part des signalements transmis lus",
+            "value": None,
+            "error": f"Colonnes manquantes : {missing_cols}",
+            "computed_at": _now_iso(),
+        }
+
+    transmitted = int(df["signalement_transmis"].sum())
+    transmitted_df = df[df["signalement_transmis"]]
+    read = int(transmitted_df["signalement_lu"].sum())
+    rate = read / transmitted if transmitted else 0.0
+
+    logger.info(f"[KPI] Signalements transmis lus = {read}/{transmitted} = {rate:.2%}")
+    return {
+        "kpi": "signalements_transmis_lus",
+        "label": "Part des signalements transmis lus",
+        "value": round(rate, 6),
+        "value_pct": f"{rate:.2%}",
+        "numerator": read,
+        "denominator": transmitted,
+        "computed_at": _now_iso(),
+    }
+
+
+@task(
+    name="kpi-signalements-lus-reponse",
+    description="Calcule la part des signalements lus ayant reçu une réponse.",
+    tags=["kpi"],
+)
+def kpi_signalements_lus_reponse_task(df: pd.DataFrame) -> dict[str, Any]:
+    logger = get_run_logger()
+
+    missing_cols = [c for c in ["signalement_lu", "signalement_reponse"] if c not in df.columns]
+    if missing_cols:
+        logger.warning(f"Colonnes manquantes : {missing_cols}")
+        return {
+            "kpi": "signalements_lus_reponse",
+            "label": "Part des signalements lus ayant une réponse",
+            "value": None,
+            "error": f"Colonnes manquantes : {missing_cols}",
+            "computed_at": _now_iso(),
+        }
+
+    read = int(df["signalement_lu"].sum())
+    read_df = df[df["signalement_lu"]]
+    response = int(read_df["signalement_reponse"].sum())
+    rate = response / read if read else 0.0
+
+    logger.info(f"[KPI] Signalements lus avec réponse = {response}/{read} = {rate:.2%}")
+    return {
+        "kpi": "signalements_lus_reponse",
+        "label": "Part des signalements lus ayant une réponse",
+        "value": round(rate, 6),
+        "value_pct": f"{rate:.2%}",
+        "numerator": response,
+        "denominator": read,
+        "computed_at": _now_iso(),
+    }
