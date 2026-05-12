@@ -17,6 +17,7 @@ Usage :
 
 from __future__ import annotations
 
+import json
 import os
 from datetime import date, datetime, timedelta
 from io import BytesIO
@@ -24,7 +25,9 @@ from typing import Any
 
 import pandas as pd
 from google.cloud import storage
-from prefect import get_run_logger, task
+from prefect import flow, get_run_logger, task
+from prefect.artifacts import create_table_artifact
+from prefect.runtime import deployment as prefect_runtime_deployment
 
 # -- Config --------------------------------------------------------------------
 GCS_BUCKET_NAME: str = os.getenv("GCS_BUCKET_NAME", "clean_complaints")
@@ -365,3 +368,225 @@ def kpi_signalements_lus_reponse_task(df: pd.DataFrame) -> dict[str, Any]:
         "denominator": read,
         "computed_at": _now_iso(),
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PUBLICATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@task(
+    name="publish-kpi-results",
+    description="Publie les résultats KPI sous forme d'artifact Prefect, JSON et résumé GCS.",
+    tags=["publish"],
+)
+def publish_kpi_results_task(kpis: list[dict[str, Any]], source_blob: str) -> dict[str, Any]:
+    logger = get_run_logger()
+
+    table_rows = []
+    for k in kpis:
+        row: dict[str, Any] = {
+            "KPI": k.get("label", k.get("kpi", "?")),
+        }
+        if "value_pct" in k:
+            row["Valeur"] = k["value_pct"]
+        elif "value" in k and k["value"] is not None:
+            row["Valeur"] = str(k["value"])
+        else:
+            row["Valeur"] = k.get("error", "N/A")
+
+        if "numerator" in k and "denominator" in k:
+            row["Détail"] = f"{k['numerator']} / {k['denominator']}"
+        else:
+            row["Détail"] = "—"
+
+        table_rows.append(row)
+
+    create_table_artifact(
+        key="signal-conso-kpis",
+        table=table_rows,
+        description=f"KPIs Signal Conso — source : `{source_blob}`",
+    )
+
+    summary = {
+        "status": "success",
+        "source": source_blob,
+        "computed_at": _now_iso(),
+        "flow_name": "kpi-pipeline-flow",
+        "deployment_name": None,
+        "deployment_id": None,
+        "flow_run_id": None,
+        "kpis": kpis,
+        "rows": table_rows,
+    }
+
+    try:
+        summary["deployment_name"] = prefect_runtime_deployment.get_name()
+        summary["deployment_id"] = prefect_runtime_deployment.get_id()
+        summary["flow_run_id"] = prefect_runtime_deployment.get_flow_run_id()
+        runtime_params = prefect_runtime_deployment.get_parameters()
+        if isinstance(runtime_params, dict) and runtime_params:
+            summary["parameters"] = runtime_params
+    except Exception:
+        pass
+
+    try:
+        client = storage.Client()
+        bucket = client.bucket(GCS_BUCKET_NAME)
+        timestamp = datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
+        blob_name = f"{GCS_RESULTS_PREFIX.rstrip('/')}/prefect_summary_{timestamp}.json"
+        blob = bucket.blob(blob_name)
+        blob.upload_from_string(
+            json.dumps(summary, ensure_ascii=False, indent=2),
+            content_type="application/json",
+        )
+        summary["results_blob"] = blob_name
+        logger.info(f"Résumé Prefect publié dans gs://{GCS_BUCKET_NAME}/{blob_name}")
+    except Exception as exc:
+        logger.warning(f"Impossible de publier le résumé GCS : {exc}")
+        summary["results_error"] = str(exc)
+
+    logger.info(f"KPIs publiés : {[k.get('kpi', '?') for k in kpis]}")
+    return summary
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SOUS-FLOWS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@flow(
+    name="flow-nombre-signalements",
+    description="Flow dédié au KPI : Nombre total de signalements.",
+    log_prints=True,
+)
+def flow_nombre_signalements(df: pd.DataFrame) -> dict[str, Any]:
+    return kpi_nombre_signalements_task(df)
+
+
+@flow(
+    name="flow-transmis-global",
+    description="Flow dédié aux KPI : signalements transmis / transmis lus.",
+    log_prints=True,
+)
+def flow_transmis_global(
+    df: pd.DataFrame,
+    kpi_type: str = "both",
+) -> dict[str, Any] | list[dict[str, Any]]:
+    """
+    kpi_type:
+      - "transmis"      -> calcule seulement le taux transmis
+      - "transmis_lus"  -> calcule seulement le taux transmis lus
+      - "both"          -> calcule les deux KPI
+    """
+    logger = get_run_logger()
+
+    if kpi_type == "transmis":
+        return kpi_signalements_transmis_task(df)
+
+    if kpi_type == "transmis_lus":
+        return kpi_signalements_transmis_lus_task(df)
+
+    if kpi_type == "both":
+        logger.info("Calcul des KPI 'transmis' et 'transmis_lus'.")
+        return [
+            kpi_signalements_transmis_task(df),
+            kpi_signalements_transmis_lus_task(df),
+        ]
+
+    raise ValueError(f"Valeur de kpi_type invalide : {kpi_type!r}")
+
+
+@flow(
+    name="flow-signalements-lus-reponse",
+    description="Flow dédié au KPI : Part des signalements lus ayant une réponse.",
+    log_prints=True,
+)
+def flow_signalements_lus_reponse(df: pd.DataFrame) -> dict[str, Any]:
+    return kpi_signalements_lus_reponse_task(df)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FLOW PRINCIPAL
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@flow(
+    name="kpi-pipeline-flow",
+    description=(
+        "Pipeline Prefect complet Signal Conso : "
+        "extraction GCS → filtrage → calcul des 4 KPIs → publication."
+    ),
+    log_prints=True,
+)
+def kpi_pipeline_flow(
+    bucket_name: str = GCS_BUCKET_NAME,
+    prefix: str = GCS_PROCESSED_PREFIX,
+    reference_date: date | None = None,
+    period: str = "Depuis le début du mois",
+    region: str | None = None,
+    department_label: str | None = None,
+) -> dict[str, Any]:
+    """
+    Paramètres
+    ----------
+    bucket_name      : nom du bucket GCS
+    prefix           : dossier dans le bucket (ex: "processed/")
+    reference_date   : date de référence (défaut : aujourd'hui)
+    period           : "Depuis le début du mois" | "7 derniers jours" | "Toutes les données"
+    region           : filtre optionnel sur reg_name
+    department_label : filtre optionnel sur department_label
+    """
+    logger = get_run_logger()
+    logger.info(f"🚀 Démarrage pipeline KPI Signal Conso | bucket={bucket_name} | période={period}")
+
+    client = get_gcs_client_task()
+    blob_name = find_latest_blob_task(client, bucket_name, prefix)
+
+    if blob_name is None:
+        logger.error("Aucun fichier trouvé dans GCS — arrêt du pipeline.")
+        return {"error": "Aucun fichier GCS trouvé", "kpis": []}
+
+    raw_df = download_dataset_task(client, bucket_name, blob_name)
+    df = preprocess_task(raw_df)
+
+    df = apply_temporal_filter_task(df, reference_date=reference_date, period=period)
+    df = apply_geo_filter_task(df, region=region, department_label=department_label)
+
+    if df.empty:
+        logger.warning("DataFrame vide après filtrage — KPIs non calculables.")
+        return {"error": "Aucune donnée après filtrage", "kpis": [], "source": blob_name}
+
+    kpis: list[dict[str, Any]] = []
+
+    kpis.append(flow_nombre_signalements(df))
+
+    transmis_results = flow_transmis_global(df, kpi_type="both")
+    if isinstance(transmis_results, list):
+        kpis.extend(transmis_results)
+    else:
+        kpis.append(transmis_results)
+
+    kpis.append(flow_signalements_lus_reponse(df))
+
+    summary = publish_kpi_results_task(kpis, source_blob=blob_name)
+
+    logger.info("✅ Pipeline terminé avec succès.")
+    return summary
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ENTRYPOINT LOCAL
+# ═══════════════════════════════════════════════════════════════════════════════
+
+if __name__ == "__main__":
+    result = kpi_pipeline_flow(
+        period="Depuis le début du mois",
+        # region="Île-de-France",
+        # department_label="75 - Paris",
+    )
+
+    print("\n──────────────────────────────────────────")
+    print("📊 Résultats KPI Signal Conso")
+    print("──────────────────────────────────────────")
+    print(json.dumps(result, indent=2, ensure_ascii=False))
