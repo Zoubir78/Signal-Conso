@@ -504,3 +504,89 @@ def flow_transmis_global(
 )
 def flow_signalements_lus_reponse(df: pd.DataFrame) -> dict[str, Any]:
     return kpi_signalements_lus_reponse_task(df)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# FLOW PRINCIPAL
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@flow(
+    name="kpi-pipeline-flow",
+    description=(
+        "Pipeline Prefect complet Signal Conso : "
+        "extraction GCS → filtrage → calcul des 4 KPIs → publication."
+    ),
+    log_prints=True,
+)
+def kpi_pipeline_flow(
+    bucket_name: str = GCS_BUCKET_NAME,
+    prefix: str = GCS_PROCESSED_PREFIX,
+    reference_date: date | None = None,
+    period: str = "Depuis le début du mois",
+    region: str | None = None,
+    department_label: str | None = None,
+) -> dict[str, Any]:
+    """
+    Paramètres
+    ----------
+    bucket_name      : nom du bucket GCS
+    prefix           : dossier dans le bucket (ex: "processed/")
+    reference_date   : date de référence (défaut : aujourd'hui)
+    period           : "Depuis le début du mois" | "7 derniers jours" | "Toutes les données"
+    region           : filtre optionnel sur reg_name
+    department_label : filtre optionnel sur department_label
+    """
+    logger = get_run_logger()
+    logger.info(f"🚀 Démarrage pipeline KPI Signal Conso | bucket={bucket_name} | période={period}")
+
+    client = get_gcs_client_task()
+    blob_name = find_latest_blob_task(client, bucket_name, prefix)
+
+    if blob_name is None:
+        logger.error("Aucun fichier trouvé dans GCS — arrêt du pipeline.")
+        return {"error": "Aucun fichier GCS trouvé", "kpis": []}
+
+    raw_df = download_dataset_task(client, bucket_name, blob_name)
+    df = preprocess_task(raw_df)
+
+    df = apply_temporal_filter_task(df, reference_date=reference_date, period=period)
+    df = apply_geo_filter_task(df, region=region, department_label=department_label)
+
+    if df.empty:
+        logger.warning("DataFrame vide après filtrage — KPIs non calculables.")
+        return {"error": "Aucune donnée après filtrage", "kpis": [], "source": blob_name}
+
+    kpis: list[dict[str, Any]] = []
+
+    kpis.append(flow_nombre_signalements(df))
+
+    transmis_results = flow_transmis_global(df, kpi_type="both")
+    if isinstance(transmis_results, list):
+        kpis.extend(transmis_results)
+    else:
+        kpis.append(transmis_results)
+
+    kpis.append(flow_signalements_lus_reponse(df))
+
+    summary = publish_kpi_results_task(kpis, source_blob=blob_name)
+
+    logger.info("✅ Pipeline terminé avec succès.")
+    return summary
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ENTRYPOINT LOCAL
+# ═══════════════════════════════════════════════════════════════════════════════
+
+if __name__ == "__main__":
+    result = kpi_pipeline_flow(
+        period="Depuis le début du mois",
+        # region="Île-de-France",
+        # department_label="75 - Paris",
+    )
+
+    print("\n──────────────────────────────────────────")
+    print("📊 Résultats KPI Signal Conso")
+    print("──────────────────────────────────────────")
+    print(json.dumps(result, indent=2, ensure_ascii=False))
