@@ -1,9 +1,25 @@
 from __future__ import annotations
 
+import re
+import unicodedata
 from pathlib import Path
+from typing import Any
 
 import joblib
 from google.cloud import storage
+
+
+def normalize_text(value: Any) -> str:
+    if value is None:
+        return ""
+
+    text = str(value).strip().lower()
+    text = unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("utf-8")
+    text = re.sub(r"https?://\S+|www\.\S+", " ", text)
+    text = re.sub(r"\S+@\S+", " ", text)
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
 
 class TicketModel:
@@ -42,3 +58,13 @@ class TicketModel:
             raise FileNotFoundError(f"Modèle introuvable : {self.model_path}")
 
         self.model = joblib.load(path)
+
+    def predict(self, text: str) -> str:
+        if self.model is None:
+            self.load()
+
+        clean_text = normalize_text(text)
+        if not clean_text:
+            raise ValueError("Le texte d'entrée est vide ou invalide.")
+
+        return self.model.predict([clean_text])[0]
