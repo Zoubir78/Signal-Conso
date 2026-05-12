@@ -4541,4 +4541,4 @@ dev = ["pytest", "pytest-mock", "ruff"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.13"
-content-hash = "b58e5144adcf9c6cac01c4c357fd7bc1ac53da52c1d0d4fa5def39bc9869514d"
+content-hash = "ed7847301d61ce48ec4264fb4205fd41a45bdbc992d6821f86b0baf6cb222f9e"
