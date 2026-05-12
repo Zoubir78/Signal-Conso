@@ -234,3 +234,134 @@ def apply_geo_filter_task(
         logger.info(f"Filtre département '{department_label}' : {before} → {len(df)} lignes.")
 
     return df
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TASKS KPI
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@task(
+    name="kpi-nombre-signalements",
+    description="Calcule le nombre total de signalements.",
+    tags=["kpi"],
+)
+def kpi_nombre_signalements_task(df: pd.DataFrame) -> dict[str, Any]:
+    logger = get_run_logger()
+    total = len(df)
+    logger.info(f"[KPI] Nombre de signalements = {total}")
+    return {
+        "kpi": "nombre_signalements",
+        "label": "Nombre de signalements",
+        "value": total,
+        "unit": "signalements",
+        "computed_at": _now_iso(),
+    }
+
+
+@task(
+    name="kpi-signalements-transmis",
+    description="Calcule la part des signalements transmis aux entreprises.",
+    tags=["kpi"],
+)
+def kpi_signalements_transmis_task(df: pd.DataFrame) -> dict[str, Any]:
+    logger = get_run_logger()
+
+    total = len(df)
+    if "signalement_transmis" not in df.columns:
+        logger.warning("Colonne 'signalement_transmis' absente.")
+        return {
+            "kpi": "signalements_transmis",
+            "label": "Part de signalements transmis",
+            "value": None,
+            "numerator": None,
+            "denominator": total,
+            "error": "Colonne manquante",
+            "computed_at": _now_iso(),
+        }
+
+    transmitted = int(df["signalement_transmis"].sum())
+    rate = transmitted / total if total else 0.0
+
+    logger.info(f"[KPI] Signalements transmis = {transmitted}/{total} = {rate:.2%}")
+    return {
+        "kpi": "signalements_transmis",
+        "label": "Part de signalements transmis",
+        "value": round(rate, 6),
+        "value_pct": f"{rate:.2%}",
+        "numerator": transmitted,
+        "denominator": total,
+        "computed_at": _now_iso(),
+    }
+
+
+@task(
+    name="kpi-signalements-transmis-lus",
+    description="Calcule la part des signalements transmis qui ont été lus.",
+    tags=["kpi"],
+)
+def kpi_signalements_transmis_lus_task(df: pd.DataFrame) -> dict[str, Any]:
+    logger = get_run_logger()
+
+    missing_cols = [c for c in ["signalement_transmis", "signalement_lu"] if c not in df.columns]
+    if missing_cols:
+        logger.warning(f"Colonnes manquantes : {missing_cols}")
+        return {
+            "kpi": "signalements_transmis_lus",
+            "label": "Part des signalements transmis lus",
+            "value": None,
+            "error": f"Colonnes manquantes : {missing_cols}",
+            "computed_at": _now_iso(),
+        }
+
+    transmitted = int(df["signalement_transmis"].sum())
+    transmitted_df = df[df["signalement_transmis"]]
+    read = int(transmitted_df["signalement_lu"].sum())
+    rate = read / transmitted if transmitted else 0.0
+
+    logger.info(f"[KPI] Signalements transmis lus = {read}/{transmitted} = {rate:.2%}")
+    return {
+        "kpi": "signalements_transmis_lus",
+        "label": "Part des signalements transmis lus",
+        "value": round(rate, 6),
+        "value_pct": f"{rate:.2%}",
+        "numerator": read,
+        "denominator": transmitted,
+        "computed_at": _now_iso(),
+    }
+
+
+@task(
+    name="kpi-signalements-lus-reponse",
+    description="Calcule la part des signalements lus ayant reçu une réponse.",
+    tags=["kpi"],
+)
+def kpi_signalements_lus_reponse_task(df: pd.DataFrame) -> dict[str, Any]:
+    logger = get_run_logger()
+
+    missing_cols = [c for c in ["signalement_lu", "signalement_reponse"] if c not in df.columns]
+    if missing_cols:
+        logger.warning(f"Colonnes manquantes : {missing_cols}")
+        return {
+            "kpi": "signalements_lus_reponse",
+            "label": "Part des signalements lus ayant une réponse",
+            "value": None,
+            "error": f"Colonnes manquantes : {missing_cols}",
+            "computed_at": _now_iso(),
+        }
+
+    read = int(df["signalement_lu"].sum())
+    read_df = df[df["signalement_lu"]]
+    response = int(read_df["signalement_reponse"].sum())
+    rate = response / read if read else 0.0
+
+    logger.info(f"[KPI] Signalements lus avec réponse = {response}/{read} = {rate:.2%}")
+    return {
+        "kpi": "signalements_lus_reponse",
+        "label": "Part des signalements lus ayant une réponse",
+        "value": round(rate, 6),
+        "value_pct": f"{rate:.2%}",
+        "numerator": response,
+        "denominator": read,
+        "computed_at": _now_iso(),
+    }
