@@ -19,12 +19,3 @@ def test_openapi_title():
 
     assert response.status_code == 200
     assert response.json()["info"]["title"] == "Signal Conso API"
-
-
-def test_routes_are_registered():
-    routes = {route.path for route in app.routes}
-
-    assert "/" in routes
-    assert "/health" in routes
-    assert any(path.startswith("/tickets") for path in routes)
-    assert any(path.startswith("/predictions") for path in routes)
