@@ -80,3 +80,16 @@ class TicketModel:
             raise ValueError("Aucun texte valide à prédire.")
 
         return list(self.model.predict(clean_texts))
+
+    def predict_with_proba(self, text: str):
+        if self.model is None:
+            self.load()
+
+        clean_text = normalize_text(text)
+        if not clean_text:
+            raise ValueError("Le texte d'entrée est vide ou invalide.")
+
+        probs = self.model.predict_proba([clean_text])[0]
+        idx = probs.argmax()
+
+        return self.model.classes_[idx], float(probs[idx])
