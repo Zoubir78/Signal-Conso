@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from app.core.config import get_settings
@@ -29,3 +29,22 @@ class TicketRequest(BaseModel):
 class TicketResponse(BaseModel):
     predicted_category: str
     confidence: float
+
+
+@router.post("/predict", response_model=TicketResponse)
+def predict_ticket(request: TicketRequest):
+    try:
+        if model.model is None:
+            model.load()
+
+        category, confidence = model.predict_with_proba(request.text)
+
+        return TicketResponse(
+            predicted_category=category,
+            confidence=confidence,
+        )
+
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
