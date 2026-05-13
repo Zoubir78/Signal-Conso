@@ -29,7 +29,6 @@ from prefect import flow, get_run_logger, task
 from prefect.artifacts import create_table_artifact
 from prefect.runtime import deployment as prefect_runtime_deployment
 from prefect_gcp import GcpCredentials
-from prefect_gcp.secret_manager import GcpSecret
 
 # -- Config --------------------------------------------------------------------
 GCS_BUCKET_NAME: str = os.getenv("GCS_BUCKET_NAME", "clean_complaints")
@@ -472,8 +471,6 @@ def publish_kpi_results_task(kpis: list[dict[str, Any]], source_blob: str) -> di
     log_prints=True,
 )
 def flow_nombre_signalements(df: pd.DataFrame) -> dict[str, Any]:
-    # Chargement du bloc à l'intérieur du flow
-    _ = GcpSecret.load("prefectgcp")
     return kpi_nombre_signalements_task(df)
 
 
@@ -486,8 +483,6 @@ def flow_transmis_global(
     df: pd.DataFrame,
     kpi_type: str = "both",
 ) -> dict[str, Any] | list[dict[str, Any]]:
-    # Chargement du bloc à l'intérieur du flow
-    _ = GcpSecret.load("prefectgcp")
     logger = get_run_logger()
 
     if kpi_type == "transmis":
@@ -512,8 +507,6 @@ def flow_transmis_global(
     log_prints=True,
 )
 def flow_signalements_lus_reponse(df: pd.DataFrame) -> dict[str, Any]:
-    # Chargement du bloc à l'intérieur du flow
-    _ = GcpSecret.load("prefectgcp")
     return kpi_signalements_lus_reponse_task(df)
 
 
@@ -538,8 +531,6 @@ def kpi_pipeline_flow(
     region: str | None = None,
     department_label: str | None = None,
 ) -> dict[str, Any]:
-    # Chargement du bloc à l'intérieur du flow principal
-    _ = GcpSecret.load("prefectgcp")
 
     logger = get_run_logger()
     logger.info(f"🚀 Démarrage pipeline KPI Signal Conso | bucket={bucket_name} | période={period}")
