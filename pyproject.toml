@@ -7,7 +7,7 @@ requires-python = ">=3.11,<3.13"
 dependencies = [
     "dbt-core",
     "dbt-bigquery",
-    "fastapi[standard]==0.110.0",
+    "fastapi[standard]==0.111.0",
     "uvicorn[standard]==0.34.0",
     "streamlit==1.56.0",
     "pandas>=2.2",
@@ -25,7 +25,9 @@ dependencies = [
     "sqlalchemy>=2.0",
     "pydantic (>=2.10,<3.0)",
     "redis==5.0.4",
-    "httpx (<0.28)"
+    "httpx (<0.28)",
+    "prefect (>=3.7.0,<4.0.0)",
+    "prefect-gcp (>=0.6.18,<0.7.0)"
 ]
 
 [project.optional-dependencies]

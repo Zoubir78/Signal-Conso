@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from io import BytesIO
 from typing import Any
 
@@ -65,7 +65,7 @@ def _bool_series(series: pd.Series) -> pd.Series:
 
 def _now_iso() -> str:
     """Heure UTC courante en ISO 8601 (datetime.utcnow() deprecie en Python 3.12)."""
-    return datetime.now(datetime.UTC).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -105,7 +105,7 @@ def find_latest_blob_task(client: storage.Client, bucket_name: str, prefix: str)
         logger.warning(f"Aucun blob trouve dans gs://{bucket_name}/{prefix}")
         return None
 
-    fallback_dt = datetime.min.replace(tzinfo=datetime.UTC)
+    fallback_dt = datetime.min.replace(tzinfo=UTC)
     latest = max(blobs, key=lambda b: b.updated or fallback_dt)
     logger.info(f"Blob le plus recent : {latest.name} (mis a jour le {latest.updated})")
     return latest.name
@@ -433,7 +433,7 @@ def publish_kpi_results_task(kpis: list[dict[str, Any]], source_blob: str) -> di
     try:
         client = storage.Client()
         bucket = client.bucket(GCS_BUCKET_NAME)
-        timestamp = datetime.now(datetime.UTC).strftime("%Y%m%dT%H%M%SZ")
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         blob_name = f"{GCS_RESULTS_PREFIX.rstrip('/')}/prefect_summary_{timestamp}.json"
         blob = bucket.blob(blob_name)
         blob.upload_from_string(
