@@ -28,6 +28,9 @@ from google.cloud import storage
 from prefect import flow, get_run_logger, task
 from prefect.artifacts import create_table_artifact
 from prefect.runtime import deployment as prefect_runtime_deployment
+from prefect_gcp.secret_manager import GcpSecret
+
+gcpsecret_block = GcpSecret.load("prefectgcp")
 
 # -- Config --------------------------------------------------------------------
 GCS_BUCKET_NAME: str = os.getenv("GCS_BUCKET_NAME", "clean_complaints")
