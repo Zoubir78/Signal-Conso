@@ -78,20 +78,18 @@ def _now_iso() -> str:
 def get_gcs_client_task() -> storage.Client:
     logger = get_run_logger()
 
-    google_credentials_json = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-
-    if google_credentials_json:
+    service_account_json = os.getenv("GCP_SERVICE_ACCOUNT_JSON")
+    if service_account_json:
         from google.oauth2 import service_account
 
-        info = json.loads(google_credentials_json)
+        info = json.loads(service_account_json)
         credentials = service_account.Credentials.from_service_account_info(
             info,
             scopes=["https://www.googleapis.com/auth/cloud-platform"],
         )
-        logger.info("Credentials GCP chargées depuis la variable GOOGLE_APPLICATION_CREDENTIALS.")
+        logger.info("Credentials GCP chargées depuis GCP_SERVICE_ACCOUNT_JSON.")
         return storage.Client(credentials=credentials, project=info.get("project_id"))
 
-    # Fallback — Prefect Block
     logger.info("Fallback : chargement depuis le block Prefect 'my-gcp-creds'.")
     gcp_creds = GcpCredentials.load("my-gcp-creds")
     return gcp_creds.get_cloud_storage_client()
