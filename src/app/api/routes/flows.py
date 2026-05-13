@@ -13,6 +13,7 @@ Architecture :
 from __future__ import annotations
 
 import os
+import uuid
 from datetime import date
 from typing import Any
 
@@ -254,3 +255,33 @@ async def trigger_lus_reponse(
 
     result = await _trigger_deployment(PREFECT_DEPLOYMENT_REPONSE, params)
     return FlowRunResponse(**result)
+
+
+# ── GET status ────────────────────────────────────────────────────────────────
+
+
+@router.get(
+    "/status/{run_id}",
+    summary="Statut d'un flow run Prefect",
+    description="Retourne l'état courant d'un flow run (SCHEDULED, RUNNING, COMPLETED, FAILED…).",
+)
+async def get_flow_run_status(run_id: str) -> dict[str, Any]:
+    try:
+        from prefect.client.orchestration import get_client
+
+        async with get_client() as client:
+            flow_run = await client.read_flow_run(uuid.UUID(run_id))
+            return {
+                "flow_run_id": run_id,
+                "flow_run_name": flow_run.name,
+                "state": flow_run.state.type.value if flow_run.state else "UNKNOWN",
+                "state_message": flow_run.state.message if flow_run.state else None,
+                "start_time": flow_run.start_time.isoformat() if flow_run.start_time else None,
+                "end_time": flow_run.end_time.isoformat() if flow_run.end_time else None,
+            }
+    except ImportError as err:
+        raise HTTPException(status_code=503, detail="Prefect non disponible.") from err
+    except ValueError as err:
+        raise HTTPException(status_code=400, detail=f"UUID invalide : {run_id}") from err
+    except Exception as err:
+        raise HTTPException(status_code=500, detail=str(err)) from err
