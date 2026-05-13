@@ -2,12 +2,12 @@
 Routes FastAPI qui déclenchent les flows Prefect via l'API Prefect Cloud.
 
 Architecture :
-  POST /flows/pipeline          → déclenche kpi_pipeline_flow complet
+  POST /flows/pipeline            → déclenche kpi_pipeline_flow complet
   POST /flows/nombre-signalements → déclenche flow_nombre_signalements
-  POST /flows/transmis          → déclenche flow_transmis_global
-  POST /flows/lus-reponse       → déclenche flow_signalements_lus_reponse
-  GET  /flows/status/{run_id}   → statut d'un flow run
-  GET  /flows/latest-kpis       → derniers KPIs publiés depuis GCS
+  POST /flows/transmis            → déclenche flow_transmis_global
+  POST /flows/lus-reponse         → déclenche flow_signalements_lus_reponse
+  GET  /flows/status/{run_id}     → statut d'un flow run
+  GET  /flows/latest-kpis         → derniers KPIs publiés depuis GCS
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import os
 from datetime import date
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 router = APIRouter()
@@ -107,3 +107,64 @@ class KpiSummaryResponse(BaseModel):
     source: str | None = None
     computed_at: str | None = None
     kpis: list[dict[str, Any]] = []
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# HELPER : déclencher un flow via Prefect API
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+async def _trigger_deployment(deployment_name: str, parameters: dict) -> dict[str, Any]:
+    """
+    Déclenche un flow run via le client Prefect asynchrone.
+    Retourne le flow_run créé.
+    """
+    try:
+        from prefect.client.orchestration import get_client
+    except ImportError:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Prefect non installé dans l'environnement API. "
+                "Ajoutez 'prefect>=3.0,<4' aux dépendances."
+            ),
+        ) from None
+
+    try:
+        async with get_client() as client:
+            # 1. On récupère les déploiements
+            deployments = await client.read_deployments()
+
+            # 2. Correction ici : On cherche le déploiement correspondant
+            deployment = None
+            for d in deployments:
+                # On vérifie si le nom du déploiement correspond au format "flow-name/deployment-name"
+                # Ou simplement au nom du déploiement seul.
+                if d.name == deployment_name.split("/")[-1]:
+                    deployment = d
+                    break
+
+            if deployment is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Déploiement '{deployment_name}' introuvable.",
+                )
+
+            # 3. Création du flow run
+            flow_run = await client.create_flow_run_from_deployment(
+                deployment_id=deployment.id,
+                parameters=parameters,
+            )
+
+            return {
+                "flow_run_id": str(flow_run.id),
+                "flow_run_name": flow_run.name,
+                "deployment_name": deployment_name,
+                "state": str(flow_run.state.type.value) if flow_run.state else "SCHEDULED",
+                "message": f"Flow run '{flow_run.name}' déclenché avec succès.",
+            }
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Erreur Prefect : {exc}") from exc
