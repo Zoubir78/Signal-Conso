@@ -28,6 +28,7 @@ from google.cloud import storage
 from prefect import flow, get_run_logger, task
 from prefect.artifacts import create_table_artifact
 from prefect.runtime import deployment as prefect_runtime_deployment
+from prefect_gcp.secret_manager import GcpSecret
 
 # -- Config --------------------------------------------------------------------
 GCS_BUCKET_NAME: str = os.getenv("GCS_BUCKET_NAME", "clean_complaints")
@@ -64,7 +65,7 @@ def _bool_series(series: pd.Series) -> pd.Series:
 
 
 def _now_iso() -> str:
-    """Heure UTC courante en ISO 8601 (datetime.utcnow() deprecie en Python 3.12)."""
+    """Heure UTC courante en ISO 8601."""
     return datetime.now(UTC).isoformat()
 
 
@@ -461,6 +462,8 @@ def publish_kpi_results_task(kpis: list[dict[str, Any]], source_blob: str) -> di
     log_prints=True,
 )
 def flow_nombre_signalements(df: pd.DataFrame) -> dict[str, Any]:
+    # Chargement du bloc à l'intérieur du flow
+    _ = GcpSecret.load("prefectgcp")
     return kpi_nombre_signalements_task(df)
 
 
@@ -473,12 +476,8 @@ def flow_transmis_global(
     df: pd.DataFrame,
     kpi_type: str = "both",
 ) -> dict[str, Any] | list[dict[str, Any]]:
-    """
-    kpi_type:
-      - "transmis"      -> calcule seulement le taux transmis
-      - "transmis_lus"  -> calcule seulement le taux transmis lus
-      - "both"          -> calcule les deux KPI
-    """
+    # Chargement du bloc à l'intérieur du flow
+    _ = GcpSecret.load("prefectgcp")
     logger = get_run_logger()
 
     if kpi_type == "transmis":
@@ -503,6 +502,8 @@ def flow_transmis_global(
     log_prints=True,
 )
 def flow_signalements_lus_reponse(df: pd.DataFrame) -> dict[str, Any]:
+    # Chargement du bloc à l'intérieur du flow
+    _ = GcpSecret.load("prefectgcp")
     return kpi_signalements_lus_reponse_task(df)
 
 
@@ -527,16 +528,9 @@ def kpi_pipeline_flow(
     region: str | None = None,
     department_label: str | None = None,
 ) -> dict[str, Any]:
-    """
-    Paramètres
-    ----------
-    bucket_name      : nom du bucket GCS
-    prefix           : dossier dans le bucket (ex: "processed/")
-    reference_date   : date de référence (défaut : aujourd'hui)
-    period           : "Depuis le début du mois" | "7 derniers jours" | "Toutes les données"
-    region           : filtre optionnel sur reg_name
-    department_label : filtre optionnel sur department_label
-    """
+    # Chargement du bloc à l'intérieur du flow principal
+    _ = GcpSecret.load("prefectgcp")
+
     logger = get_run_logger()
     logger.info(f"🚀 Démarrage pipeline KPI Signal Conso | bucket={bucket_name} | période={period}")
 
@@ -582,8 +576,6 @@ def kpi_pipeline_flow(
 if __name__ == "__main__":
     result = kpi_pipeline_flow(
         period="Depuis le début du mois",
-        # region="Île-de-France",
-        # department_label="75 - Paris",
     )
 
     print("\n──────────────────────────────────────────")

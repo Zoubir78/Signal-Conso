@@ -6,18 +6,23 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from app.flows.signal_conso_flows import (
-    _bool_series,
-    _is_missing,
-    _to_bool,
-    apply_geo_filter_task,
-    apply_temporal_filter_task,
-    kpi_nombre_signalements_task,
-    kpi_signalements_lus_reponse_task,
-    kpi_signalements_transmis_lus_task,
-    kpi_signalements_transmis_task,
-    preprocess_task,
-)
+# On crée un mock pour simuler le bloc GCP
+mock_block = MagicMock()
+mock_block.get.return_value = "fake-secret-value"
+
+with patch("prefect_gcp.secret_manager.GcpSecret.load", return_value=mock_block):
+    from app.flows.signal_conso_flows import (
+        _bool_series,
+        _is_missing,
+        _to_bool,
+        apply_geo_filter_task,
+        apply_temporal_filter_task,
+        kpi_nombre_signalements_task,
+        kpi_signalements_lus_reponse_task,
+        kpi_signalements_transmis_lus_task,
+        kpi_signalements_transmis_task,
+        preprocess_task,
+    )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # FIXTURES
