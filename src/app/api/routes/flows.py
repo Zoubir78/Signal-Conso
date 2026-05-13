@@ -16,7 +16,7 @@ import os
 from datetime import date
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 router = APIRouter()
@@ -168,3 +168,89 @@ async def _trigger_deployment(deployment_name: str, parameters: dict) -> dict[st
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Erreur Prefect : {exc}") from exc
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ROUTES
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+@router.post(
+    "/pipeline",
+    response_model=FlowRunResponse,
+    summary="Déclenche le pipeline KPI complet",
+    description=(
+        "Lance le flow Prefect `kpi-pipeline-flow` : extraction GCS → filtrage → "
+        "calcul des 4 KPIs (signalements, transmis, lus, réponse) → publication artifact."
+    ),
+)
+async def trigger_pipeline(body: PipelineRequest) -> FlowRunResponse:
+    params = body.model_dump(exclude_none=True)
+    if "reference_date" in params and params["reference_date"] is not None:
+        params["reference_date"] = params["reference_date"].isoformat()
+
+    result = await _trigger_deployment(PREFECT_DEPLOYMENT_PIPELINE, params)
+    return FlowRunResponse(**result)
+
+
+@router.post(
+    "/nombre-signalements",
+    response_model=FlowRunResponse,
+    summary="Déclenche le KPI : nombre de signalements",
+    description="Lance uniquement le flow calculant le nombre total de signalements.",
+)
+async def trigger_nombre_signalements(
+    bucket_name: str = Query(default=GCS_BUCKET_NAME),
+    prefix: str = Query(default="processed/"),
+    period: str = Query(default="Depuis le début du mois"),
+    region: str | None = Query(default=None),
+) -> FlowRunResponse:
+    params = {
+        "bucket_name": bucket_name,
+        "prefix": prefix,
+        "period": period,
+    }
+    if region:
+        params["region"] = region
+
+    result = await _trigger_deployment(PREFECT_DEPLOYMENT_NOMBRE, params)
+    return FlowRunResponse(**result)
+
+
+@router.post(
+    "/transmis",
+    response_model=FlowRunResponse,
+    summary="Déclenche les KPIs : signalements transmis et/ou transmis lus",
+    description=(
+        "Lance le flow `flow-transmis-global`. "
+        "Paramètre `kpi_type` : 'transmis' | 'transmis_lus' | 'both'."
+    ),
+)
+async def trigger_transmis(body: TransmisRequest) -> FlowRunResponse:
+    params = body.model_dump(exclude_none=True)
+    result = await _trigger_deployment(PREFECT_DEPLOYMENT_TRANSMIS, params)
+    return FlowRunResponse(**result)
+
+
+@router.post(
+    "/lus-reponse",
+    response_model=FlowRunResponse,
+    summary="Déclenche le KPI : signalements lus ayant une réponse",
+    description="Lance uniquement le flow calculant le taux de réponse aux signalements lus.",
+)
+async def trigger_lus_reponse(
+    bucket_name: str = Query(default=GCS_BUCKET_NAME),
+    prefix: str = Query(default="processed/"),
+    period: str = Query(default="Depuis le début du mois"),
+    region: str | None = Query(default=None),
+) -> FlowRunResponse:
+    params = {
+        "bucket_name": bucket_name,
+        "prefix": prefix,
+        "period": period,
+    }
+    if region:
+        params["region"] = region
+
+    result = await _trigger_deployment(PREFECT_DEPLOYMENT_REPONSE, params)
+    return FlowRunResponse(**result)
