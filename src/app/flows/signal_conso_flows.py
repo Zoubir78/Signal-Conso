@@ -91,8 +91,8 @@ def get_gcs_client_task() -> storage.Client:
         return storage.Client(credentials=credentials, project=info.get("project_id"))
 
     logger.info("Fallback : chargement depuis le block Prefect 'my-gcp-creds'.")
-    gcp_creds = GcpCredentials.load("my-gcp-creds")
-    return gcp_creds.get_cloud_storage_client()
+    gcp_credentials_block = GcpCredentials.load("my-gcp-creds")
+    return gcp_credentials_block.get_cloud_storage_client()
 
 
 @task(
