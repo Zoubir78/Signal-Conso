@@ -12,6 +12,7 @@ Architecture :
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from datetime import date
@@ -285,3 +286,50 @@ async def get_flow_run_status(run_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"UUID invalide : {run_id}") from err
     except Exception as err:
         raise HTTPException(status_code=500, detail=str(err)) from err
+
+    # ── GET latest KPIs depuis GCS ────────────────────────────────────────────────
+
+
+@router.get(
+    "/latest-kpis",
+    response_model=KpiSummaryResponse,
+    summary="Derniers KPIs calculés",
+    description=(
+        "Lit le fichier JSON de résultats le plus récent dans GCS "
+        f"(préfixe : {GCS_RESULTS_PREFIX}) et retourne les KPIs."
+    ),
+)
+def get_latest_kpis() -> KpiSummaryResponse:
+    try:
+        from datetime import UTC, datetime
+
+        from google.cloud import storage as gcs
+
+        client = gcs.Client()
+        bucket = client.bucket(GCS_BUCKET_NAME)
+        blobs = list(bucket.list_blobs(prefix=GCS_RESULTS_PREFIX))
+
+        if not blobs:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"Aucun résultat trouvé dans gs://{GCS_BUCKET_NAME}/{GCS_RESULTS_PREFIX}. "
+                    "Lancez d'abord le pipeline via POST /flows/pipeline."
+                ),
+            )
+
+        fallback = datetime.min.replace(tzinfo=UTC)
+        latest = max(blobs, key=lambda b: b.updated or fallback)
+        data = json.loads(latest.download_as_bytes().decode("utf-8"))
+
+        return KpiSummaryResponse(
+            status=data.get("status", "unknown"),
+            source=data.get("source"),
+            computed_at=data.get("computed_at"),
+            kpis=data.get("kpis", []),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Erreur GCS : {exc}") from exc
