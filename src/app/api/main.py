@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 
+from app.api.routes.flows import router as flows_router
 from app.api.routes.health import router as health_router
 from app.api.routes.predictions import router as predictions_router
 from app.api.routes.tickets import router as tickets_router
@@ -16,6 +17,7 @@ app = FastAPI(
 app.include_router(health_router)
 app.include_router(tickets_router, prefix="/tickets", tags=["tickets"])
 app.include_router(predictions_router, prefix="/predictions", tags=["predictions"])
+app.include_router(flows_router, prefix="/flows", tags=["flows prefect"])
 
 
 @app.get("/", tags=["root"])
