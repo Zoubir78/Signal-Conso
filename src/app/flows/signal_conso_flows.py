@@ -28,6 +28,7 @@ from google.cloud import storage
 from prefect import flow, get_run_logger, task
 from prefect.artifacts import create_table_artifact
 from prefect.runtime import deployment as prefect_runtime_deployment
+from prefect_gcp import GcpCredentials
 from prefect_gcp.secret_manager import GcpSecret
 
 # -- Config --------------------------------------------------------------------
@@ -74,18 +75,12 @@ def _now_iso() -> str:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-@task(
-    name="get-gcs-client",
-    description="Initialise le client Google Cloud Storage.",
-    retries=2,
-    retry_delay_seconds=5,
-    tags=["gcs", "infra"],
-    persist_result=False,
-)
+@task(name="get-gcs-client", persist_result=False)
 def get_gcs_client_task() -> storage.Client:
     logger = get_run_logger()
-    logger.info("Initialisation du client GCS.")
-    return storage.Client()
+    logger.info("Chargement des credentials GCP depuis le block Prefect.")
+    gcp_creds = GcpCredentials.load("signal-conso-gcp-creds")
+    return gcp_creds.get_cloud_storage_client()
 
 
 @task(
