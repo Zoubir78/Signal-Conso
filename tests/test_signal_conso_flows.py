@@ -10,7 +10,7 @@ import pytest
 mock_block = MagicMock()
 mock_block.get.return_value = "fake-secret-value"
 
-with patch("prefect_gcp.credentials.GcpSecret.load", return_value=mock_block):
+with patch("prefect_gcp.secret_manager.GcpSecret.load", return_value=mock_block):
     from app.flows.signal_conso_flows import (
         _bool_series,
         _is_missing,
