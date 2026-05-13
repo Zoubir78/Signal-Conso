@@ -106,6 +106,12 @@ def find_latest_blob_task(client: storage.Client, bucket_name: str, prefix: str)
     logger = get_run_logger()
     logger.info(f"Recherche du blob le plus recent dans gs://{bucket_name}/{prefix}")
 
+    if not bucket_name or not bucket_name.strip():
+        raise ValueError("GCS_BUCKET_NAME est vide.")
+
+    if not prefix or not prefix.strip():
+        raise ValueError("GCS_PROCESSED_PREFIX est vide.")
+
     bucket = client.bucket(bucket_name)
     blobs = list(bucket.list_blobs(prefix=prefix))
 
