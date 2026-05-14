@@ -468,6 +468,75 @@ def download_model(blob_name: str, local: str = "/tmp/tmp_model.joblib") -> str:
     return local
 
 
+def _fmt_dt(value: Any) -> str:
+    if value in (None, ""):
+        return "—"
+    try:
+        ts = pd.to_datetime(value, utc=True, errors="coerce")
+        if pd.isna(ts):
+            return str(value)
+        return ts.tz_convert("Europe/Paris").strftime("%d/%m/%Y %H:%M")
+    except Exception:
+        return str(value)
+
+
+def _load_prefect_summaries(limit: int = 20) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    try:
+        blobs = [b for b in _gcs().bucket(GCS_BUCKET_NAME).list_blobs(prefix=GCS_RESULTS_PREFIX)]
+        if not blobs:
+            return summaries
+        blobs = sorted(
+            [b for b in blobs if b.name.lower().endswith(".json")],
+            key=lambda b: b.updated or datetime.min.replace(tzinfo=datetime.UTC),
+            reverse=True,
+        )[:limit]
+        for blob in blobs:
+            try:
+                data = blob.download_as_text()
+                summary = json.loads(data)
+                if isinstance(summary, dict):
+                    summary.setdefault("results_blob", blob.name)
+                    summary.setdefault(
+                        "updated_at",
+                        blob.updated.isoformat() if getattr(blob, "updated", None) else None,
+                    )
+                    summaries.append(summary)
+            except Exception:
+                continue
+    except Exception:
+        return summaries
+    return summaries
+
+
+def _prefect_runs_dataframe(limit: int = 20) -> pd.DataFrame:
+    summaries = _load_prefect_summaries(limit=limit)
+    rows: list[dict[str, Any]] = []
+    for summary in summaries:
+        status = str(summary.get("status", summary.get("state", "unknown"))).strip().lower()
+        computed_at = (
+            summary.get("computed_at")
+            or summary.get("finished_at")
+            or summary.get("started_at")
+            or summary.get("updated_at")
+        )
+        rows.append(
+            {
+                "deployment_name": summary.get("deployment_name", "—"),
+                "status": status,
+                "computed_at": pd.to_datetime(computed_at, utc=True, errors="coerce"),
+                "results_blob": summary.get("results_blob", "—"),
+                "summary": summary,
+            }
+        )
+    df_runs = pd.DataFrame(rows)
+    if not df_runs.empty and "computed_at" in df_runs.columns:
+        df_runs = df_runs.sort_values(
+            "computed_at", ascending=False, na_position="last"
+        ).reset_index(drop=True)
+    return df_runs
+
+
 # ─────────────────────────────────────────────
 # API HELPER
 # ─────────────────────────────────────────────
@@ -864,6 +933,147 @@ with tab_overview:
                 if c in filtered_df.columns
             ]
             st.dataframe(filtered_df[preview_cols].head(30), width="stretch", height=280)
+
+
+# ══════════════════════════════════════════════
+# TAB 2 — FLOWS TEMPS RÉEL
+# ══════════════════════════════════════════════
+with tab_flows:
+    st.markdown(
+        '<div class="sec-header">⏱️ Flows Prefect en temps réel</div>', unsafe_allow_html=True
+    )
+    st.caption(
+        "Affichage automatique du dernier run détecté dans GCS à chaque chargement de l’application."
+    )
+
+    flow_runs = _prefect_runs_dataframe(limit=20)
+    latest_flow = flow_runs.iloc[0].to_dict() if not flow_runs.empty else None
+
+    if latest_flow is None:
+        st.info(f"Aucun résultat Prefect trouvé dans `{GCS_RESULTS_PREFIX}`.")
+    else:
+        latest_summary = (
+            latest_flow.get("summary", {}) if isinstance(latest_flow.get("summary"), dict) else {}
+        )
+        status_raw = str(latest_flow.get("status", "unknown")).lower()
+        status_icon = (
+            "🟢"
+            if status_raw in ["success", "completed"]
+            else "🔴"
+            if status_raw in ["failed", "crashed"]
+            else "🔵"
+        )
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric(
+            "Dernier run", _fmt_dt(latest_flow.get("computed_at") or latest_flow.get("updated_at"))
+        )
+        c2.metric("Déploiement", latest_flow.get("deployment_name", "—"))
+        c3.metric("Statut", status_raw.title())
+        c4.metric("Source", Path(str(latest_flow.get("results_blob", "—"))).name)
+
+        st.markdown(
+            f"""
+            <div style="background:#161b22;border:1px solid #21262d;border-radius:12px;padding:16px;margin:16px 0;">
+              <div style="font-size:14px;font-weight:700;color:#e6edf3;">{status_icon} Dernier run détecté</div>
+              <div style="font-size:12px;color:#8b949e;line-height:1.8;margin-top:8px;">
+                <b style="color:#e6edf3;">Déploiement :</b> {latest_flow.get("deployment_name", "—")}<br>
+                <b style="color:#e6edf3;">Statut :</b> {status_raw.title()}<br>
+                <b style="color:#e6edf3;">Fichier source :</b> {latest_flow.get("results_blob", "—")}
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        latest_kpis = latest_summary.get("kpis", []) if isinstance(latest_summary, dict) else []
+        if isinstance(latest_kpis, list) and latest_kpis:
+            st.markdown(
+                '<div class="sec-header">📌 KPIs du dernier run</div>', unsafe_allow_html=True
+            )
+            kpi_rows = []
+            for item in latest_kpis:
+                if not isinstance(item, dict):
+                    continue
+                val = item.get("value_pct")
+                if val is None:
+                    raw_val = item.get("value")
+                    try:
+                        val = float(raw_val)
+                    except Exception:
+                        val = None
+                if val is None:
+                    continue
+                if isinstance(val, str):
+                    sval = val.replace("%", "")
+                    try:
+                        val = float(sval) / 100 if float(sval) > 1 else float(sval)
+                    except Exception:
+                        continue
+                kpi_rows.append({"KPI": item.get("label", "KPI"), "Valeur": float(val)})
+            if kpi_rows:
+                kpi_df = pd.DataFrame(kpi_rows)
+                fig_kpi = px.bar(
+                    kpi_df, x="Valeur", y="KPI", orientation="h", template="plotly_dark"
+                )
+                fig_kpi.update_layout(
+                    height=320, margin=dict(l=0, r=0, t=10, b=0), xaxis_tickformat=".0%"
+                )
+                st.plotly_chart(fig_kpi, width="stretch")
+
+        st.markdown('<div class="sec-header">📈 Historique des runs</div>', unsafe_allow_html=True)
+        if not flow_runs.empty:
+            history = flow_runs.copy()
+            history["date_label"] = (
+                history["computed_at"].dt.tz_convert("Europe/Paris").dt.strftime("%d/%m %H:%M")
+                if history["computed_at"].notna().any()
+                else history.index.astype(str)
+            )
+            status_order = {"success": 1, "completed": 1, "failed": 0, "crashed": 0}
+            history["score"] = history["status"].map(status_order).fillna(0)
+            fig_hist = px.scatter(
+                history,
+                x="computed_at",
+                y="deployment_name",
+                color="status",
+                symbol="status",
+                hover_data={"results_blob": True, "computed_at": True},
+                template="plotly_dark",
+            )
+            fig_hist.update_layout(
+                height=330, margin=dict(l=0, r=0, t=10, b=0), legend_title_text="Statut"
+            )
+            st.plotly_chart(fig_hist, width="stretch")
+            st.dataframe(
+                history[["computed_at", "deployment_name", "status", "results_blob"]].rename(
+                    columns={
+                        "computed_at": "Exécuté le",
+                        "deployment_name": "Déploiement",
+                        "status": "Statut",
+                        "results_blob": "Source",
+                    }
+                ),
+                width="stretch",
+                height=260,
+            )
+        else:
+            st.info("Aucun historique de run disponible.")
+
+        if latest_summary:
+            with st.expander("Réponse brute du dernier run"):
+                st.json(latest_summary)
+
+    st.divider()
+    st.markdown(
+        """
+        <div style="background:#161b22;border:1px solid #21262d;border-radius:12px;padding:16px;">
+          <div style="font-size:13px;color:#8b949e;line-height:1.8;">
+            La vue ci-dessus se met à jour automatiquement en relisant le dernier artefact Prefect trouvé dans GCS.
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 # ══════════════════════════════════════════════
