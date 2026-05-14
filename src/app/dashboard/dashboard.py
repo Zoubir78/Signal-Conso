@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import ast
 import json
 import os
 import sys
+from collections import Counter
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import requests
@@ -190,6 +193,242 @@ hr { border-color: #21262d; }
 
 
 # ─────────────────────────────────────────────
+# HELPERS UTILS
+# ─────────────────────────────────────────────
+STOPWORDS_FR = {
+    "a",
+    "alors",
+    "au",
+    "aucuns",
+    "aussi",
+    "autre",
+    "avant",
+    "avec",
+    "avoir",
+    "bon",
+    "car",
+    "ce",
+    "cela",
+    "ces",
+    "ceux",
+    "chaque",
+    "ci",
+    "comme",
+    "comment",
+    "dans",
+    "des",
+    "du",
+    "dedans",
+    "dehors",
+    "depuis",
+    "devrait",
+    "doit",
+    "donc",
+    "dos",
+    "debut",
+    "elle",
+    "elles",
+    "en",
+    "encore",
+    "essai",
+    "est",
+    "et",
+    "eu",
+    "fait",
+    "faites",
+    "fois",
+    "font",
+    "hors",
+    "ici",
+    "il",
+    "ils",
+    "je",
+    "la",
+    "le",
+    "les",
+    "leur",
+    "ma",
+    "maintenant",
+    "mais",
+    "mes",
+    "mine",
+    "moins",
+    "mon",
+    "mot",
+    "meme",
+    "ni",
+    "nommes",
+    "notre",
+    "nous",
+    "nouveaux",
+    "ou",
+    "par",
+    "parce",
+    "parole",
+    "pas",
+    "personnes",
+    "peu",
+    "peut",
+    "piece",
+    "plupart",
+    "pour",
+    "pourquoi",
+    "quand",
+    "que",
+    "quel",
+    "quelle",
+    "quelles",
+    "quels",
+    "qui",
+    "sa",
+    "sans",
+    "ses",
+    "seulement",
+    "si",
+    "sien",
+    "son",
+    "sont",
+    "sous",
+    "soyez",
+    "sujet",
+    "sur",
+    "ta",
+    "tandis",
+    "te",
+    "tes",
+    "ton",
+    "tous",
+    "tout",
+    "trop",
+    "tres",
+    "tu",
+    "un",
+    "une",
+    "vos",
+    "votre",
+    "vous",
+    "vu",
+    "ca",
+    "etaient",
+    "etat",
+    "etions",
+    "ete",
+    "etre",
+}
+
+
+def _is_missing(v: Any) -> bool:
+    if v is None:
+        return True
+    if isinstance(v, float) and pd.isna(v):
+        return True
+    return bool(isinstance(v, str) and not v.strip())
+
+
+def _parse_multivalue(value: Any) -> list[str]:
+    if _is_missing(value):
+        return []
+    if isinstance(value, (list, tuple, set)):
+        items = list(value)
+    else:
+        raw = str(value).strip()
+        if not raw:
+            return []
+        if raw[0] in "[({":
+            try:
+                parsed = ast.literal_eval(raw)
+                items = list(parsed) if isinstance(parsed, (list, tuple, set)) else [parsed]
+            except (ValueError, SyntaxError):
+                items = [p.strip() for p in raw.strip("[](){} ").split(",") if p.strip()]
+        else:
+            items = [raw]
+    return [str(i).strip() for i in items if str(i).strip()]
+
+
+def _normalize_label(t: str) -> str:
+    return " ".join(str(t).strip().split())
+
+
+def _bool_series(s: pd.Series) -> pd.Series:
+    TRUTHY = {"1", "true", "t", "yes", "y", "oui", "vrai", "on"}
+
+    def _tb(v):
+        if _is_missing(v):
+            return False
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return bool(v)
+        return str(v).strip().lower() in TRUTHY
+
+    return s.apply(_tb)
+
+
+def _department_label(row: pd.Series) -> str:
+    def _clean_dep_code(v: Any) -> str:
+        if _is_missing(v):
+            return ""
+        txt = str(v).strip().replace(".0", "")
+        txt = txt.zfill(2) if txt.isdigit() and len(txt) <= 2 else txt
+        return _normalize_label(txt)
+
+    code = _clean_dep_code(row.get("dep_code", ""))
+    name = _normalize_label(row.get("dep_name", "")) if not _is_missing(row.get("dep_name")) else ""
+    if code and name:
+        return f"{code} – {name}"
+    return code or name or "Inconnu"
+
+
+def _frequency(df: pd.DataFrame, col: str, limit: int = 15) -> pd.Series:
+    if col not in df.columns:
+        return pd.Series(dtype=int)
+    counter: Counter = Counter()
+    display: dict = {}
+    for raw in df[col].dropna():
+        for v in _parse_multivalue(raw) or [str(raw)]:
+            lbl = _normalize_label(v)
+            if not lbl:
+                continue
+            key = lbl.casefold()
+            counter[key] += 1
+            display.setdefault(key, lbl)
+    if not counter:
+        return pd.Series(dtype=int)
+    top = sorted(counter.items(), key=lambda x: x[1], reverse=True)[:limit]
+    return pd.Series({display[k]: c for k, c in top})
+
+
+def _keyword_freq(df: pd.DataFrame, limit: int = 20) -> pd.Series:
+    counter: Counter = Counter()
+    display: dict = {}
+    cols = [c for c in ["tags", "subcategories", "clean_text"] if c in df.columns]
+    if not cols:
+        return pd.Series(dtype=int)
+    for _, row in df[cols].iterrows():
+        tokens = []
+        for c in ["tags", "subcategories"]:
+            if c in row and not _is_missing(row[c]):
+                tokens.extend(_parse_multivalue(row[c]))
+        if not tokens and "clean_text" in row and not _is_missing(row["clean_text"]):
+            tokens = [
+                t
+                for t in str(row["clean_text"]).lower().split()
+                if len(t) > 3 and t not in STOPWORDS_FR
+            ]
+        for tok in tokens:
+            lbl = _normalize_label(tok)
+            if not lbl:
+                continue
+            key = lbl.casefold()
+            counter[key] += 1
+            display.setdefault(key, lbl)
+    if not counter:
+        return pd.Series(dtype=int)
+    top = sorted(counter.items(), key=lambda x: x[1], reverse=True)[:limit]
+    return pd.Series({display[k]: c for k, c in top})
+
+
+# ─────────────────────────────────────────────
 # GCS HELPERS
 # ─────────────────────────────────────────────
 @st.cache_resource
@@ -247,6 +486,21 @@ def predict_api(text: str, model_blob: str | None = None) -> dict:
     r = requests.post(PREDICTION_URL, json=payload, timeout=30)
     r.raise_for_status()
     return r.json()
+
+
+# ─────────────────────────────────────────────
+# DATASET (chargé une fois)
+# ─────────────────────────────────────────────
+df, source_name = load_latest_dataset()
+
+if not df.empty:
+    if "creationdate" in df.columns:
+        df["creationdate"] = pd.to_datetime(df["creationdate"], errors="coerce")
+    df["department_label"] = (
+        df.apply(_department_label, axis=1)
+        if ("dep_name" in df.columns or "dep_code" in df.columns)
+        else "Inconnu"
+    )
 
 
 # ─────────────────────────────────────────────
