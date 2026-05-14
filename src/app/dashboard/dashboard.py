@@ -12,8 +12,6 @@ import requests
 import streamlit as st
 from google.cloud import storage
 
-from scripts.pipeline import run_pipeline
-
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -389,6 +387,8 @@ with tab_pipeline:
             )
 
         try:
+            from scripts.pipeline import run_pipeline
+
             result = run_pipeline(_log)
             st.success("✅ Pipeline terminé avec succès !")
 
