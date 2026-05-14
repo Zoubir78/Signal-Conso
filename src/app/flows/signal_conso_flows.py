@@ -481,29 +481,50 @@ def flow_nombre_signalements(df: pd.DataFrame) -> dict[str, Any]:
 
 @flow(
     name="flow-transmis-global",
-    description="Flow dédié aux KPI : signalements transmis / transmis lus.",
+    description="Flow KPI : signalements transmis / transmis lus.",
     log_prints=True,
 )
 def flow_transmis_global(
-    df: pd.DataFrame,
+    bucket_name: str = "",
+    prefix: str = "",
+    period: str = "Depuis le début du mois",
+    region: str | None = None,
+    department_label: str | None = None,
     kpi_type: str = "both",
 ) -> dict[str, Any] | list[dict[str, Any]]:
     logger = get_run_logger()
 
+    # Résolution des paramètres
+    bucket_name = bucket_name or os.getenv("GCS_BUCKET_NAME") or "clean_complaints"
+    prefix = prefix or os.getenv("GCS_PROCESSED_PREFIX") or "processed/"
+
+    # Chargement autonome des données
+    client = get_gcs_client_task()
+    blob_name = find_latest_blob_task(client, bucket_name, prefix)
+    if blob_name is None:
+        return {"error": "Aucun fichier GCS trouvé", "kpis": []}
+
+    raw_df = download_dataset_task(client, bucket_name, blob_name)
+    df = preprocess_task(raw_df)
+    df = apply_temporal_filter_task(df, period=period)
+    df = apply_geo_filter_task(df, region=region, department_label=department_label)
+
+    if df.empty:
+        return {"error": "Aucune donnée après filtrage", "kpis": []}
+
+    logger.info(f"Calcul KPI transmis — kpi_type='{kpi_type}'")
+
     if kpi_type == "transmis":
         return kpi_signalements_transmis_task(df)
-
     if kpi_type == "transmis_lus":
         return kpi_signalements_transmis_lus_task(df)
-
     if kpi_type == "both":
-        logger.info("Calcul des KPI 'transmis' et 'transmis_lus'.")
         return [
             kpi_signalements_transmis_task(df),
             kpi_signalements_transmis_lus_task(df),
         ]
 
-    raise ValueError(f"Valeur de kpi_type invalide : {kpi_type!r}")
+    raise ValueError(f"kpi_type invalide : {kpi_type!r}")
 
 
 @flow(
