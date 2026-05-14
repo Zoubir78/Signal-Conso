@@ -509,6 +509,11 @@ def _load_prefect_summaries(limit: int = 20) -> list[dict[str, Any]]:
     return summaries
 
 
+def _load_latest_prefect_summary() -> dict[str, Any] | None:
+    summaries = _load_prefect_summaries(limit=1)
+    return summaries[0] if summaries else None
+
+
 def _prefect_runs_dataframe(limit: int = 20) -> pd.DataFrame:
     summaries = _load_prefect_summaries(limit=limit)
     rows: list[dict[str, Any]] = []
