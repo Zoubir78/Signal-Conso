@@ -239,7 +239,6 @@ def test_get_flow_run_status_valid_uuid(mock_trigger):
     assert response.json()["state"] == "COMPLETED"
 
 
-@patch("app.api.routes.flows.get_latest_kpis")
 def test_get_latest_kpis_returns_summary():
     # ✅ Mocker google.cloud.storage.Client, pas la fonction route
     fake_blob = MagicMock()
