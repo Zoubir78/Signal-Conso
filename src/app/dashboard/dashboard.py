@@ -12,6 +12,8 @@ import requests
 import streamlit as st
 from google.cloud import storage
 
+from scripts.pipeline import run_pipeline
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -335,6 +337,96 @@ with tab_predict:
                 except Exception as e:
                     st.error(f"Erreur API : {e}")
                     st.info(f"Vérifiez que l'API est démarrée sur `{PREDICTION_URL}`")
+
+
+# ══════════════════════════════════════════════
+# TAB 6 — PIPELINE
+# ══════════════════════════════════════════════
+with tab_pipeline:
+    st.markdown(
+        '<div class="sec-header">⚙️ Pipeline complet SignalConso</div>', unsafe_allow_html=True
+    )
+
+    st.markdown(
+        """
+    <div style="background:#161b22;border:1px solid #21262d;border-radius:10px;padding:16px;margin-bottom:16px;">
+      <div style="font-size:13px;color:#8b949e;line-height:2;">
+        <b style="color:#e6edf3;">Flux :</b><br>
+        <span style="color:#58a6ff;">①</span> Extract API SignalConso (10 000 enregistrements)<br>
+        <span style="color:#58a6ff;">②</span> Upload GCS <code>raw/</code> → table externe BigQuery<br>
+        <span style="color:#58a6ff;">③</span> dbt run → staging → intermediate → mart_signalconso<br>
+        <span style="color:#58a6ff;">④</span> Lecture mart depuis BigQuery<br>
+        <span style="color:#58a6ff;">⑤</span> Entraînement multi-modèles (LogReg · SGD · LinearSVC · NB · RF)<br>
+        <span style="color:#58a6ff;">⑥</span> Leaderboard + sélection du meilleur modèle<br>
+        <span style="color:#58a6ff;">⑦</span> Upload GCS <code>models/</code> + rapport JSON
+      </div>
+    </div>
+    """,
+        unsafe_allow_html=True,
+    )
+
+    if st.button("🚀 Lancer le pipeline", width="content"):
+        log_lines: list[str] = []
+        log_box = st.empty()
+
+        def _log(msg: str):
+            log_lines.append(str(msg))
+            log_html = "<br>".join(
+                f'<span style="color:#3fb950">{line}</span>'
+                if any(line.startswith(p) for p in ["✔", "🏁", "🏆"])
+                else f'<span style="color:#f85149">{line}</span>'
+                if any(line.startswith(p) for p in ["✖", "❌"])
+                else f'<span style="color:#e3b341">{line}</span>'
+                if any(line.startswith(p) for p in ["⚠", "📊 Leaderboard"])
+                else f'<span style="color:#58a6ff">{line}</span>'
+                if any(line.startswith(p) for p in ["🚀", "📥", "🔧", "🤖", "📤", "☁️"])
+                else f'<span style="color:#c9d1d9">{line}</span>'
+                for line in log_lines[-80:]
+            )
+            log_box.markdown(
+                f'<div class="pipeline-log">{log_html}</div>',
+                unsafe_allow_html=True,
+            )
+
+        try:
+            result = run_pipeline(_log)
+            st.success("✅ Pipeline terminé avec succès !")
+
+            # Résumé des résultats
+            st.divider()
+            st.markdown('<div class="sec-header">📊 Résultats du run</div>', unsafe_allow_html=True)
+
+            r1, r2, r3, r4 = st.columns(4)
+            r1.metric("Enregistrements bruts", f"{result.get('raw_rows', 0):,}")
+            r2.metric("Lignes du mart dbt", f"{result.get('mart_rows', 0):,}")
+            r3.metric("Meilleur modèle", result.get("best_model", "–"))
+            r4.metric("Accuracy", f"{result.get('accuracy', 0):.2%}")
+
+            # Leaderboard du run
+            if "leaderboard" in result and result["leaderboard"]:
+                st.markdown(
+                    '<div class="sec-header">🏆 Leaderboard de ce run</div>', unsafe_allow_html=True
+                )
+                lb_run = sorted(result["leaderboard"], key=lambda x: x["accuracy"], reverse=True)
+                html = '<table class="lb-table"><thead><tr><th>Rang</th><th>Modèle</th><th>Accuracy</th><th>F1-macro</th><th>Train</th><th>Test</th></tr></thead><tbody>'
+                for i, r in enumerate(lb_run, 1):
+                    badge = (
+                        '<span class="badge-gold">🥇</span>'
+                        if i == 1
+                        else f'<span class="badge-silver">#{i}</span>'
+                    )
+                    html += f'<tr><td>{badge}</td><td style="font-weight:600">{r["model"]}</td>'
+                    html += f"<td>{r['accuracy']:.2%}</td><td>{r['f1_macro']:.2%}</td>"
+                    html += f'<td style="color:#8b949e">{r.get("n_train", "–"):,}</td>'
+                    html += f'<td style="color:#8b949e">{r.get("n_test", "–"):,}</td></tr>'
+                html += "</tbody></table>"
+                st.markdown(html, unsafe_allow_html=True)
+
+            # Rafraîchit le cache pour voir les nouveaux modèles
+            st.cache_data.clear()
+
+        except Exception as e:
+            st.error(f"Erreur pipeline : {e}")
 
 
 # ══════════════════════════════════════════════
