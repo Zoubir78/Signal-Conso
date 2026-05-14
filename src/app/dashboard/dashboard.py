@@ -12,6 +12,7 @@ from typing import Any
 
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import requests
 import streamlit as st
 from google.cloud import storage
@@ -1225,6 +1226,127 @@ with tab_predict:
                 except Exception as e:
                     st.error(f"Erreur API : {e}")
                     st.info(f"Vérifiez que l'API est démarrée sur `{PREDICTION_URL}`")
+
+
+# ══════════════════════════════════════════════
+# TAB 5 — MODÈLES ML
+# ══════════════════════════════════════════════
+with tab_ml:
+    st.markdown('<div class="sec-header">🧠 Leaderboard des modèles</div>', unsafe_allow_html=True)
+
+    report = load_evaluation_report()
+    if report:
+        st.markdown(
+            f"Dernier run · **{report.get('date', '–')}** · Best model : `{report.get('best_model', '–')}`"
+        )
+        lb = report.get("leaderboard", [])
+
+        if lb:
+            # Leaderboard HTML
+            html = '<table class="lb-table"><thead><tr><th>Rang</th><th>Modèle</th><th>Accuracy</th><th>F1-macro</th><th>Train</th><th>Test</th></tr></thead><tbody>'
+            max_acc = max(r["accuracy"] for r in lb)
+            for i, r in enumerate(sorted(lb, key=lambda x: x["accuracy"], reverse=True), 1):
+                badge = (
+                    '<span class="badge-gold">🥇 Best</span>'
+                    if i == 1
+                    else f'<span class="badge-silver">#{i}</span>'
+                )
+                bar_w = int(r["accuracy"] / max_acc * 100)
+                html += f'<tr><td>{badge}</td><td style="font-weight:600">{r["model"]}</td>'
+                html += f'<td><span class="bar-fill" style="width:{bar_w}px;margin-right:8px"></span>{r["accuracy"]:.2%}</td>'
+                html += f"<td>{r['f1_macro']:.2%}</td>"
+                html += f'<td style="color:#8b949e">{r.get("n_train", "–"):,}</td>'
+                html += f'<td style="color:#8b949e">{r.get("n_test", "–"):,}</td></tr>'
+            html += "</tbody></table>"
+            st.markdown(html, unsafe_allow_html=True)
+
+            st.divider()
+
+            # Graphique comparatif
+            lb_df = pd.DataFrame(lb).sort_values("accuracy", ascending=True)
+            fig = go.Figure()
+            fig.add_trace(
+                go.Bar(
+                    y=lb_df["model"],
+                    x=lb_df["accuracy"],
+                    name="Accuracy",
+                    orientation="h",
+                    marker_color="#1f6feb",
+                    marker_line_width=0,
+                )
+            )
+            fig.add_trace(
+                go.Bar(
+                    y=lb_df["model"],
+                    x=lb_df["f1_macro"],
+                    name="F1-macro",
+                    orientation="h",
+                    marker_color="#3fb950",
+                    marker_line_width=0,
+                )
+            )
+            fig.update_layout(
+                barmode="group",
+                template="plotly_dark",
+                paper_bgcolor="#0d1117",
+                plot_bgcolor="#0d1117",
+                xaxis=dict(gridcolor="#21262d", tickformat=".0%"),
+                yaxis=dict(gridcolor="#21262d"),
+                legend=dict(bgcolor="#161b22", bordercolor="#21262d"),
+                margin=dict(l=0, r=0, t=10, b=0),
+                height=300,
+            )
+            st.plotly_chart(fig, width="stretch")
+
+        # Benchmark sur le dataset courant
+        st.divider()
+        st.markdown(
+            '<div class="sec-header">⚖️ Benchmark modèles sur dataset actuel</div>',
+            unsafe_allow_html=True,
+        )
+
+        model_blobs = [b for b in list_blobs("models/runs/") if b.endswith(".joblib")]
+        if model_blobs and not df.empty and "clean_text" in df.columns and "category" in df.columns:
+            selected_models = st.multiselect("Sélectionner des modèles à comparer", model_blobs)
+            if selected_models and st.button("📊 Lancer le benchmark"):
+                import joblib
+                from sklearn.metrics import accuracy_score, f1_score
+
+                bench_results = []
+                eval_df = df.dropna(subset=["clean_text", "category"]).copy()
+                prog = st.progress(0)
+
+                for idx, blob_name in enumerate(selected_models):
+                    try:
+                        local = download_model(blob_name, f"/tmp/bench_{idx}.joblib")
+                        model = joblib.load(local)
+                        preds = model.predict(eval_df["clean_text"])
+                        bench_results.append(
+                            {
+                                "Modèle": blob_name.split("/")[-1].replace(".joblib", ""),
+                                "Accuracy": accuracy_score(eval_df["category"], preds),
+                                "F1-macro": f1_score(
+                                    eval_df["category"], preds, average="macro", zero_division=0
+                                ),
+                            }
+                        )
+                    except Exception as e:
+                        bench_results.append({"Modèle": blob_name, "Erreur": str(e)})
+                    prog.progress((idx + 1) / len(selected_models))
+
+                bench_df = pd.DataFrame(bench_results)
+                st.dataframe(bench_df, width="stretch")
+                if "Accuracy" in bench_df.columns:
+                    best = bench_df.sort_values("F1-macro", ascending=False).iloc[0]
+                    st.success(
+                        f"🏆 Meilleur : **{best['Modèle']}** — Accuracy {best['Accuracy']:.2%} · F1 {best['F1-macro']:.2%}"
+                    )
+        else:
+            st.info("Lancez d'abord le pipeline pour générer des modèles.")
+    else:
+        st.info(
+            "Aucun rapport d'évaluation trouvé dans GCS. Lancez le pipeline pour entraîner les modèles."
+        )
 
 
 # ══════════════════════════════════════════════
