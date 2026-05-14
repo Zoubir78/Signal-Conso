@@ -1,9 +1,9 @@
 from pathlib import Path
 
-DASHBOARD_PATH = Path(__file__).parent.parent / "dashboard.py"
+DASHBOARD_PATH = Path("app/dashboard/dashboard.py")
 
 
-def test_realtime_tab_is_inserted_next_to_overview_and_prefect_sidebar_removed():
+def test_realtime_tab_is_inserted_next_to_overview():
     text = DASHBOARD_PATH.read_text(encoding="utf-8")
 
     assert "Flows temps réel" in text
