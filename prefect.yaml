@@ -26,9 +26,9 @@ deployments:
       work_queue_name: default
       job_variables:
         env:
-          GCS_BUCKET_NAME: "{{ prefect.variables.gcs_bucket_name }}"
-          GCS_PROCESSED_PREFIX: "{{ prefect.variables.gcs_processed_prefix }}"
-          GCS_RESULTS_PREFIX: "{{ prefect.variables.gcs_results_prefix }}"
+          GCS_BUCKET_NAME: "clean_complaints"
+          GCS_PROCESSED_PREFIX: "processed/"
+          GCS_RESULTS_PREFIX: "prefect-results/"
 
     schedule:
       cron: "0 */4 * * *"
@@ -36,8 +36,6 @@ deployments:
       active: true
 
     parameters:
-      bucket_name: "{{ prefect.variables.gcs_bucket_name }}"
-      prefix: "{{ prefect.variables.gcs_processed_prefix }}"
       period: "Depuis le debut du mois"
       region: null
       department_label: null
@@ -53,9 +51,9 @@ deployments:
       work_queue_name: default
       job_variables:
         env:
-          GCS_BUCKET_NAME: "{{ prefect.variables.gcs_bucket_name }}"
-          GCS_PROCESSED_PREFIX: "{{ prefect.variables.gcs_processed_prefix }}"
-          GCS_RESULTS_PREFIX: "{{ prefect.variables.gcs_results_prefix }}"
+          GCS_BUCKET_NAME: "clean_complaints"
+          GCS_PROCESSED_PREFIX: "processed/"
+          GCS_RESULTS_PREFIX: "prefect-results/"
 
     schedule:
       cron: "0 */4 * * *"
@@ -75,9 +73,9 @@ deployments:
       work_queue_name: default
       job_variables:
         env:
-          GCS_BUCKET_NAME: "{{ prefect.variables.gcs_bucket_name }}"
-          GCS_PROCESSED_PREFIX: "{{ prefect.variables.gcs_processed_prefix }}"
-          GCS_RESULTS_PREFIX: "{{ prefect.variables.gcs_results_prefix }}"
+          GCS_BUCKET_NAME: "clean_complaints"
+          GCS_PROCESSED_PREFIX: "processed/"
+          GCS_RESULTS_PREFIX: "prefect-results/"
 
     schedule:
       cron: "0 */4 * * *"
@@ -98,9 +96,9 @@ deployments:
       work_queue_name: default
       job_variables:
         env:
-          GCS_BUCKET_NAME: "{{ prefect.variables.gcs_bucket_name }}"
-          GCS_PROCESSED_PREFIX: "{{ prefect.variables.gcs_processed_prefix }}"
-          GCS_RESULTS_PREFIX: "{{ prefect.variables.gcs_results_prefix }}"
+          GCS_BUCKET_NAME: "clean_complaints"
+          GCS_PROCESSED_PREFIX: "processed/"
+          GCS_RESULTS_PREFIX: "prefect-results/"
 
     schedule:
       cron: "0 */4 * * *"
@@ -120,9 +118,9 @@ deployments:
       work_queue_name: default
       job_variables:
         env:
-          GCS_BUCKET_NAME: "{{ prefect.variables.gcs_bucket_name }}"
-          GCS_PROCESSED_PREFIX: "{{ prefect.variables.gcs_processed_prefix }}"
-          GCS_RESULTS_PREFIX: "{{ prefect.variables.gcs_results_prefix }}"
+          GCS_BUCKET_NAME: "clean_complaints"
+          GCS_PROCESSED_PREFIX: "processed/"
+          GCS_RESULTS_PREFIX: "prefect-results/"
 
     schedule:
       cron: "0 8 * * *"
@@ -130,8 +128,6 @@ deployments:
       active: true
 
     parameters:
-      bucket_name: "{{ prefect.variables.gcs_bucket_name }}"
-      prefix: "{{ prefect.variables.gcs_processed_prefix }}"
       period: "Depuis le debut du mois"
       region: null
       department_label: null
