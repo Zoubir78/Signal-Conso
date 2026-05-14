@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import ast
 import json
 import os
 import sys
-from datetime import datetime
+from collections import Counter
+from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
+import plotly.express as px
 import requests
 import streamlit as st
 from google.cloud import storage
@@ -190,6 +194,242 @@ hr { border-color: #21262d; }
 
 
 # ─────────────────────────────────────────────
+# HELPERS UTILS
+# ─────────────────────────────────────────────
+STOPWORDS_FR = {
+    "a",
+    "alors",
+    "au",
+    "aucuns",
+    "aussi",
+    "autre",
+    "avant",
+    "avec",
+    "avoir",
+    "bon",
+    "car",
+    "ce",
+    "cela",
+    "ces",
+    "ceux",
+    "chaque",
+    "ci",
+    "comme",
+    "comment",
+    "dans",
+    "des",
+    "du",
+    "dedans",
+    "dehors",
+    "depuis",
+    "devrait",
+    "doit",
+    "donc",
+    "dos",
+    "debut",
+    "elle",
+    "elles",
+    "en",
+    "encore",
+    "essai",
+    "est",
+    "et",
+    "eu",
+    "fait",
+    "faites",
+    "fois",
+    "font",
+    "hors",
+    "ici",
+    "il",
+    "ils",
+    "je",
+    "la",
+    "le",
+    "les",
+    "leur",
+    "ma",
+    "maintenant",
+    "mais",
+    "mes",
+    "mine",
+    "moins",
+    "mon",
+    "mot",
+    "meme",
+    "ni",
+    "nommes",
+    "notre",
+    "nous",
+    "nouveaux",
+    "ou",
+    "par",
+    "parce",
+    "parole",
+    "pas",
+    "personnes",
+    "peu",
+    "peut",
+    "piece",
+    "plupart",
+    "pour",
+    "pourquoi",
+    "quand",
+    "que",
+    "quel",
+    "quelle",
+    "quelles",
+    "quels",
+    "qui",
+    "sa",
+    "sans",
+    "ses",
+    "seulement",
+    "si",
+    "sien",
+    "son",
+    "sont",
+    "sous",
+    "soyez",
+    "sujet",
+    "sur",
+    "ta",
+    "tandis",
+    "te",
+    "tes",
+    "ton",
+    "tous",
+    "tout",
+    "trop",
+    "tres",
+    "tu",
+    "un",
+    "une",
+    "vos",
+    "votre",
+    "vous",
+    "vu",
+    "ca",
+    "etaient",
+    "etat",
+    "etions",
+    "ete",
+    "etre",
+}
+
+
+def _is_missing(v: Any) -> bool:
+    if v is None:
+        return True
+    if isinstance(v, float) and pd.isna(v):
+        return True
+    return bool(isinstance(v, str) and not v.strip())
+
+
+def _parse_multivalue(value: Any) -> list[str]:
+    if _is_missing(value):
+        return []
+    if isinstance(value, (list, tuple, set)):
+        items = list(value)
+    else:
+        raw = str(value).strip()
+        if not raw:
+            return []
+        if raw[0] in "[({":
+            try:
+                parsed = ast.literal_eval(raw)
+                items = list(parsed) if isinstance(parsed, (list, tuple, set)) else [parsed]
+            except (ValueError, SyntaxError):
+                items = [p.strip() for p in raw.strip("[](){} ").split(",") if p.strip()]
+        else:
+            items = [raw]
+    return [str(i).strip() for i in items if str(i).strip()]
+
+
+def _normalize_label(t: str) -> str:
+    return " ".join(str(t).strip().split())
+
+
+def _bool_series(s: pd.Series) -> pd.Series:
+    TRUTHY = {"1", "true", "t", "yes", "y", "oui", "vrai", "on"}
+
+    def _tb(v):
+        if _is_missing(v):
+            return False
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return bool(v)
+        return str(v).strip().lower() in TRUTHY
+
+    return s.apply(_tb)
+
+
+def _department_label(row: pd.Series) -> str:
+    def _clean_dep_code(v: Any) -> str:
+        if _is_missing(v):
+            return ""
+        txt = str(v).strip().replace(".0", "")
+        txt = txt.zfill(2) if txt.isdigit() and len(txt) <= 2 else txt
+        return _normalize_label(txt)
+
+    code = _clean_dep_code(row.get("dep_code", ""))
+    name = _normalize_label(row.get("dep_name", "")) if not _is_missing(row.get("dep_name")) else ""
+    if code and name:
+        return f"{code} – {name}"
+    return code or name or "Inconnu"
+
+
+def _frequency(df: pd.DataFrame, col: str, limit: int = 15) -> pd.Series:
+    if col not in df.columns:
+        return pd.Series(dtype=int)
+    counter: Counter = Counter()
+    display: dict = {}
+    for raw in df[col].dropna():
+        for v in _parse_multivalue(raw) or [str(raw)]:
+            lbl = _normalize_label(v)
+            if not lbl:
+                continue
+            key = lbl.casefold()
+            counter[key] += 1
+            display.setdefault(key, lbl)
+    if not counter:
+        return pd.Series(dtype=int)
+    top = sorted(counter.items(), key=lambda x: x[1], reverse=True)[:limit]
+    return pd.Series({display[k]: c for k, c in top})
+
+
+def _keyword_freq(df: pd.DataFrame, limit: int = 20) -> pd.Series:
+    counter: Counter = Counter()
+    display: dict = {}
+    cols = [c for c in ["tags", "subcategories", "clean_text"] if c in df.columns]
+    if not cols:
+        return pd.Series(dtype=int)
+    for _, row in df[cols].iterrows():
+        tokens = []
+        for c in ["tags", "subcategories"]:
+            if c in row and not _is_missing(row[c]):
+                tokens.extend(_parse_multivalue(row[c]))
+        if not tokens and "clean_text" in row and not _is_missing(row["clean_text"]):
+            tokens = [
+                t
+                for t in str(row["clean_text"]).lower().split()
+                if len(t) > 3 and t not in STOPWORDS_FR
+            ]
+        for tok in tokens:
+            lbl = _normalize_label(tok)
+            if not lbl:
+                continue
+            key = lbl.casefold()
+            counter[key] += 1
+            display.setdefault(key, lbl)
+    if not counter:
+        return pd.Series(dtype=int)
+    top = sorted(counter.items(), key=lambda x: x[1], reverse=True)[:limit]
+    return pd.Series({display[k]: c for k, c in top})
+
+
+# ─────────────────────────────────────────────
 # GCS HELPERS
 # ─────────────────────────────────────────────
 @st.cache_resource
@@ -235,6 +475,39 @@ PREDICTION_URL = os.getenv("PREDICTION_URL", "http://localhost:8000/predictions"
 MODEL_REFRESH_SECONDS = 90
 
 
+def _model_label(blob_name: str) -> str:
+    blob_name = blob_name.replace("\\", "/")
+    if blob_name == "models/model.joblib":
+        return "🟢 Modèle actif · latest"
+    if blob_name.startswith("models/model_") and blob_name.endswith(".joblib"):
+        stamp = Path(blob_name).stem.replace("model_", "")
+        return f"📦 Snapshot · {stamp}"
+    if "/runs/" in blob_name:
+        parts = blob_name.split("/")
+        run_date = parts[2] if len(parts) >= 4 else "run"
+        model_name = Path(blob_name).stem
+        return f"🧪 Run {run_date} · {model_name}"
+    return f"📄 {Path(blob_name).name}"
+
+
+@st.cache_data(ttl=MODEL_REFRESH_SECONDS)
+def list_available_models() -> list[str]:
+    blobs = [b for b in list_blobs("models/") if b.endswith(".joblib")]
+    if not blobs:
+        return []
+
+    def _sort_key(blob: str) -> tuple:
+        if blob == "models/model.joblib":
+            return (0, "")
+        if blob.startswith("models/model_"):
+            return (1, blob, "")
+        if "/runs/" in blob:
+            return (2, blob, "")
+        return (3, blob, "")
+
+    return sorted(dict.fromkeys(blobs), key=_sort_key)
+
+
 def predict_api(text: str, model_blob: str | None = None) -> dict:
     payload = {
         "text": text,
@@ -247,6 +520,120 @@ def predict_api(text: str, model_blob: str | None = None) -> dict:
     r = requests.post(PREDICTION_URL, json=payload, timeout=30)
     r.raise_for_status()
     return r.json()
+
+
+# ─────────────────────────────────────────────
+# SIDEBAR
+# ─────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("## 🛡️ SignalConso")
+    st.markdown("**Intelligence Platform**")
+    st.caption("Analyse, monitoring et classification des signalements")
+    st.divider()
+
+    st.markdown("#### ⚙️ Connexions")
+    st.markdown(f"**API prédiction** `{PREDICTION_URL}`")
+    st.markdown(f"**Bucket GCS** `{GCS_BUCKET_NAME}`")
+    st.markdown(f"**Modèle par défaut** `{DEFAULT_MODEL_VER}`")
+
+    if st.button("🔄 Rafraîchir les artefacts", width="stretch"):
+        st.cache_data.clear()
+        st.rerun()
+
+    st.divider()
+
+    report = load_evaluation_report()
+    if report:
+        st.markdown("#### 🏆 Dernier run ML")
+        st.markdown(f"**Date** `{report.get('date', '–')}`")
+        st.markdown(f"**Best** `{report.get('best_model', '–')}`")
+        lb = report.get("leaderboard", [])
+        if lb:
+            best_acc = lb[0].get("accuracy", 0)
+            st.metric("Accuracy", f"{best_acc:.2%}")
+    else:
+        st.info("Aucun rapport d'évaluation trouvé dans GCS.")
+
+    st.divider()
+
+    st.markdown("#### 🤖 Modèle actif")
+    available_models = list_available_models()
+    if available_models:
+        default_index = 0
+        if (
+            "selected_model_blob" not in st.session_state
+            or st.session_state["selected_model_blob"] not in available_models
+        ):
+            st.session_state["selected_model_blob"] = available_models[0]
+        else:
+            default_index = available_models.index(st.session_state["selected_model_blob"])
+
+        selected_model_blob = st.selectbox(
+            "Choisir le modèle de classification",
+            available_models,
+            index=default_index,
+            format_func=_model_label,
+            key="selected_model_blob",
+        )
+        st.caption(f"Modèle utilisé pour l'onglet Prédiction : {Path(selected_model_blob).name}")
+    else:
+        st.warning("Aucun modèle .joblib trouvé dans `models/`.")
+        st.session_state["selected_model_blob"] = DEFAULT_MODEL_PATH
+        selected_model_blob = DEFAULT_MODEL_PATH
+
+    st.divider()
+
+    st.divider()
+
+    st.markdown("#### ⚡ Raccourcis")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("🏠 Home", width="stretch"):
+            st.session_state["active_tab_hint"] = "overview"
+            st.rerun()
+    with c2:
+        if st.button("📦 GCS", width="stretch"):
+            st.session_state["active_tab_hint"] = "gcs"
+            st.rerun()
+
+    st.caption("Le modèle sélectionné sera transmis à l’API de prédiction.")
+
+# ─────────────────────────────────────────────
+# HEADER
+# ─────────────────────────────────────────────
+st.markdown(
+    """
+<div style="display:flex;align-items:center;gap:16px;margin-bottom:8px;">
+  <div style="font-size:38px;font-weight:800;color:#e6edf3;letter-spacing:-1px;">
+    Signal<span style="color:#1f6feb;">Conso</span>
+  </div>
+  <div style="background:#1f6feb22;border:1px solid #1f6feb44;border-radius:20px;
+              padding:4px 14px;font-size:12px;color:#58a6ff;font-weight:600;
+              font-family:'DM Mono',monospace;">
+    INTELLIGENCE PLATFORM
+  </div>
+</div>
+<div style="color:#8b949e;font-size:14px;margin-bottom:24px;">
+  Analyse · Classification ML · Monitoring · Pipeline GCS + BigQuery + dbt
+</div>
+""",
+    unsafe_allow_html=True,
+)
+
+
+# ─────────────────────────────────────────────
+# DATASET (chargé une fois)
+# ─────────────────────────────────────────────
+df, source_name = load_latest_dataset()
+
+if not df.empty:
+    if "creationdate" in df.columns:
+        df["creationdate"] = pd.to_datetime(df["creationdate"], errors="coerce")
+    df["department_label"] = (
+        df.apply(_department_label, axis=1)
+        if ("dep_name" in df.columns or "dep_code" in df.columns)
+        else "Inconnu"
+    )
 
 
 # ─────────────────────────────────────────────
@@ -264,6 +651,294 @@ tabs = st.tabs(
     ]
 )
 tab_overview, tab_flows, tab_map, tab_predict, tab_ml, tab_pipeline, tab_gcs = tabs
+
+
+# ══════════════════════════════════════════════
+# TAB 1 — VUE D'ENSEMBLE
+# ══════════════════════════════════════════════
+with tab_overview:
+    if df.empty:
+        st.warning("Aucun dataset trouvé dans `processed/` sur GCS.")
+    else:
+        # ── Détection / normalisation de la colonne date ─────────────
+        DATE_COL_CANDIDATES = ["creationdate", "creation_date", "date_creation", "created_at"]
+        date_col = next((c for c in DATE_COL_CANDIDATES if c in df.columns), None)
+
+        # On fixe la date de référence à AUJOURD'HUI par défaut
+        ref_date = date.today()
+
+        if date_col is None:
+            st.warning("Aucune colonne de date trouvée dans le dataset.")
+            working_df = df.copy()
+        else:
+            working_df = df.copy()
+            working_df[date_col] = pd.to_datetime(working_df[date_col], errors="coerce")
+            working_df["record_date"] = working_df[date_col].dt.normalize()
+
+        # ── Filtres ──────────────────────────────────────────────────
+        f1, f2, f3, f4 = st.columns([1.2, 1.2, 1.5, 1.5])
+
+        with f1:
+            sel_date = st.date_input(
+                "Date de référence",
+                value=ref_date,  # Affichera toujours aujourd'hui au refresh
+                format="DD/MM/YYYY",
+            )
+
+        with f2:
+            period = st.selectbox(
+                "Période",
+                ["Depuis le début du mois", "7 derniers jours", "Toutes les données"],
+                index=0,  # Par défaut sur le mois en cours
+            )
+
+        with f3:
+            regions = ["Toutes les régions"]
+            if "reg_name" in working_df.columns:
+                regions += sorted(working_df["reg_name"].dropna().astype(str).unique().tolist())
+            sel_region = st.selectbox("Région", regions)
+
+        # Filtrage des données
+        filtered_df = working_df.copy()
+
+        if "record_date" in filtered_df.columns:
+            filtered_df = filtered_df[filtered_df["record_date"].notna()].copy()
+            ref = pd.Timestamp(sel_date)
+
+            if period == "Depuis le début du mois":
+                start = ref.replace(day=1)
+                end = ref
+            elif period == "7 derniers jours":
+                start = ref - pd.Timedelta(days=6)
+                end = ref
+            else:
+                start = filtered_df["record_date"].min()
+                end = ref
+
+            filtered_df = filtered_df[
+                (filtered_df["record_date"] >= start.normalize())
+                & (filtered_df["record_date"] <= end.normalize())
+            ]
+
+            st.caption(
+                f"Filtre actif : {start.date()} → {end.date()} · {len(filtered_df):,} ligne(s)"
+            )
+
+        if sel_region != "Toutes les régions" and "reg_name" in filtered_df.columns:
+            filtered_df = filtered_df[filtered_df["reg_name"].astype(str) == sel_region]
+
+        with f4:
+            if "department_label" in filtered_df.columns:
+                dept_choices = ["Tous les départements"] + sorted(
+                    filtered_df["department_label"].dropna().astype(str).unique().tolist()
+                )
+            else:
+                dept_choices = ["Tous les départements"]
+            sel_dept = st.selectbox("Département", dept_choices)
+
+        if sel_dept != "Tous les départements" and "department_label" in filtered_df.columns:
+            filtered_df = filtered_df[filtered_df["department_label"] == sel_dept]
+
+        st.divider()
+
+        if filtered_df.empty:
+            st.info("Aucune donnée pour les filtres sélectionnés.")
+        else:
+            # ── KPIs ──────────────────────────────────────────────────
+            total = len(filtered_df)
+
+            # Utilisation de .get() ou vérification pour éviter les erreurs de colonnes manquantes
+            def get_sum(col):
+                return (
+                    int(_bool_series(filtered_df[col]).sum()) if col in filtered_df.columns else 0
+                )
+
+            transmis = get_sum("signalement_transmis")
+            lus = get_sum("signalement_lu")
+            reponses = get_sum("signalement_reponse")
+
+            r_trans = transmis / total if total else 0
+            r_lus = lus / transmis if transmis else 0
+            r_rep = reponses / lus if lus else 0
+
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Signalements", f"{total:,}")
+            k2.metric("Taux transmission", f"{r_trans:.1%}")
+            k3.metric("Taux lecture", f"{r_lus:.1%}")
+            k4.metric("Taux réponse", f"{r_rep:.1%}")
+
+            for rate, label, num, den in [
+                (r_trans, "Transmission", transmis, total),
+                (r_lus, "Lecture", lus, transmis),
+                (r_rep, "Réponse", reponses, lus),
+            ]:
+                st.markdown(
+                    f"<div style='font-size:11px;color:#8b949e;margin-top:8px;'>{label} — {num:,} / {den:,}</div>",
+                    unsafe_allow_html=True,
+                )
+                st.progress(min(max(rate, 0.0), 1.0))
+
+            st.divider()
+
+            # ── Évolution temporelle ──────────────────────────────────
+            st.markdown(
+                '<div class="sec-header">📈 Évolution des signalements</div>',
+                unsafe_allow_html=True,
+            )
+            if "record_date" in filtered_df.columns:
+                timeline = (
+                    filtered_df.groupby(filtered_df["record_date"].dt.date)
+                    .size()
+                    .reset_index(name="count")
+                    .rename(columns={"record_date": "date"})
+                )
+
+                # Utilisation de x="date" car on vient de renommer la colonne
+                fig = px.area(
+                    timeline,
+                    x="date",
+                    y="count",
+                    color_discrete_sequence=["#1f6feb"],
+                    template="plotly_dark",
+                )
+                fig.update_layout(
+                    paper_bgcolor="#0d1117",
+                    plot_bgcolor="#0d1117",
+                    margin=dict(l=0, r=0, t=10, b=0),
+                    height=260,
+                    showlegend=False,
+                )
+                st.plotly_chart(fig, width="stretch")
+
+            # ── Top catégories et Mots-clés ───────────────────────────
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.markdown(
+                    '<div class="sec-header">📂 Top catégories</div>', unsafe_allow_html=True
+                )
+                if "category" in filtered_df.columns:
+                    cat_s = _frequency(filtered_df, "category", limit=12)
+                    if not cat_s.empty:
+                        fig = px.bar(
+                            x=cat_s.values, y=cat_s.index, orientation="h", template="plotly_dark"
+                        )
+                        fig.update_layout(
+                            yaxis=dict(autorange="reversed"),
+                            height=340,
+                            margin=dict(l=0, r=0, t=10, b=0),
+                        )
+                        st.plotly_chart(fig, width="stretch")
+
+            with col_b:
+                st.markdown('<div class="sec-header">🔑 Mots-clés</div>', unsafe_allow_html=True)
+                kw = _keyword_freq(filtered_df, limit=15)
+                if not kw.empty:
+                    fig = px.bar(
+                        x=kw.values,
+                        y=kw.index,
+                        orientation="h",
+                        color_discrete_sequence=["#3fb950"],
+                        template="plotly_dark",
+                    )
+                    fig.update_layout(
+                        yaxis=dict(autorange="reversed"),
+                        height=340,
+                        margin=dict(l=0, r=0, t=10, b=0),
+                    )
+                    st.plotly_chart(fig, width="stretch")
+
+            # ── Aperçu données ────────────────────────────────────────
+            st.markdown(
+                '<div class="sec-header">📋 Aperçu des données</div>', unsafe_allow_html=True
+            )
+            preview_cols = [
+                c
+                for c in [
+                    "record_date",
+                    "department_label",
+                    "reg_name",
+                    "category",
+                    "status",
+                    "clean_text",
+                ]
+                if c in filtered_df.columns
+            ]
+            st.dataframe(filtered_df[preview_cols].head(30), width="stretch", height=280)
+
+
+# ══════════════════════════════════════════════
+# TAB 3 — CARTOGRAPHIE
+# ══════════════════════════════════════════════
+with tab_map:
+    st.markdown(
+        '<div class="sec-header">🗺️ Carte des signalements par département</div>',
+        unsafe_allow_html=True,
+    )
+
+    if filtered_df.empty or "dep_code" not in filtered_df.columns:
+        st.info("Données ou colonne dep_code absentes.")
+    else:
+        try:
+            from urllib.request import urlopen
+
+            with urlopen(
+                "https://france-geojson.gregoiredavid.fr/repo/departements.geojson"
+            ) as resp:
+                geojson = json.load(resp)
+
+            dep_counts = (
+                filtered_df["dep_code"]
+                .astype(str)
+                .str.strip()
+                .str.zfill(2)
+                .value_counts()
+                .reset_index()
+            )
+            dep_counts.columns = ["code", "count"]
+
+            fig = px.choropleth(
+                dep_counts,
+                geojson=geojson,
+                locations="code",
+                featureidkey="properties.code",
+                color="count",
+                color_continuous_scale=[[0, "#0d1117"], [0.3, "#1f6feb"], [1, "#58a6ff"]],
+                labels={"count": "Signalements"},
+                template="plotly_dark",
+            )
+            fig.update_geos(fitbounds="locations", visible=False)
+            fig.update_layout(
+                paper_bgcolor="#0d1117",
+                geo_bgcolor="#0d1117",
+                margin=dict(r=0, t=0, l=0, b=0),
+                height=550,
+                coloraxis_colorbar=dict(
+                    title="",
+                    tickfont=dict(color="#8b949e"),
+                    bgcolor="#161b22",
+                    bordercolor="#21262d",
+                ),
+            )
+            st.plotly_chart(fig, width="stretch")
+
+            # Top 10 départements
+            st.markdown(
+                '<div class="sec-header">🏆 Top 10 départements</div>', unsafe_allow_html=True
+            )
+            top_deps = dep_counts.sort_values("count", ascending=False).head(10)
+            max_cnt = top_deps["count"].max()
+            html = '<table class="lb-table"><thead><tr><th>#</th><th>Département</th><th>Signalements</th><th>Part</th></tr></thead><tbody>'
+            for i, row in enumerate(top_deps.itertuples(), 1):
+                pct = row.count / dep_counts["count"].sum() * 100
+                bar_w = int(row.count / max_cnt * 120)
+                html += f'<tr><td style="color:#8b949e">{i}</td><td>{row.code}</td>'
+                html += f'<td><span style="color:#58a6ff;font-weight:600">{row.count:,}</span></td>'
+                html += f'<td><span class="bar-fill" style="width:{bar_w}px"></span> <span style="color:#8b949e">{pct:.1f}%</span></td></tr>'
+            html += "</tbody></table>"
+            st.markdown(html, unsafe_allow_html=True)
+
+        except Exception as e:
+            st.error(f"Erreur carte : {e}")
 
 
 # ══════════════════════════════════════════════
