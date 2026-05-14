@@ -97,20 +97,21 @@ def get_gcs_client_task() -> storage.Client:
 
 @task(
     name="find-latest-blob",
-    description="Trouve le blob le plus recent dans le prefix GCS.",
     retries=3,
     retry_delay_seconds=10,
     tags=["gcs", "extract"],
 )
 def find_latest_blob_task(client: storage.Client, bucket_name: str, prefix: str) -> str | None:
     logger = get_run_logger()
-    logger.info(f"bucket_name='{bucket_name}' | prefix='{prefix}'")  # ← debug
 
-    if not bucket_name or not bucket_name.strip():
-        raise ValueError("GCS_BUCKET_NAME est vide. Vérifiez les Job Variables Prefect.")
+    # Fallback défensif à l'intérieur de la task
+    bucket_name = bucket_name or os.getenv("GCS_BUCKET_NAME") or "clean_complaints"
+    prefix = prefix or os.getenv("GCS_PROCESSED_PREFIX") or "processed/"
 
-    if not prefix or not prefix.strip():
-        raise ValueError("GCS_PROCESSED_PREFIX est vide. Vérifiez les Job Variables Prefect.")
+    logger.info(f"bucket_name='{bucket_name}' | prefix='{prefix}'")  # debug
+
+    if not bucket_name.strip():
+        raise ValueError("GCS_BUCKET_NAME est vide après fallback — vérifiez les Job Variables.")
 
     bucket = client.bucket(bucket_name)
     blobs = list(bucket.list_blobs(prefix=prefix))
@@ -528,13 +529,16 @@ def flow_signalements_lus_reponse(df: pd.DataFrame) -> dict[str, Any]:
     log_prints=True,
 )
 def kpi_pipeline_flow(
-    bucket_name: str = GCS_BUCKET_NAME,
-    prefix: str = GCS_PROCESSED_PREFIX,
+    bucket_name: str = "",
+    prefix: str = "",
     reference_date: date | None = None,
     period: str = "Depuis le début du mois",
     region: str | None = None,
     department_label: str | None = None,
 ) -> dict[str, Any]:
+
+    bucket_name = bucket_name or os.getenv("GCS_BUCKET_NAME") or "clean_complaints"
+    prefix = prefix or os.getenv("GCS_PROCESSED_PREFIX") or "processed/"
 
     logger = get_run_logger()
     logger.info(f"🚀 Démarrage pipeline KPI Signal Conso | bucket={bucket_name} | période={period}")
