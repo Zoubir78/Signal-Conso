@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -218,7 +219,8 @@ def test_get_flow_run_status_invalid_uuid():
 
 @patch("app.api.routes.flows._trigger_deployment", new_callable=AsyncMock)
 def test_get_flow_run_status_valid_uuid(mock_trigger):
-    with patch("app.api.routes.flows.get_client") as mock_get_client:
+    # ✅ Patcher prefect.client.orchestration.get_client, pas le module flows
+    with patch("prefect.client.orchestration.get_client") as mock_get_client:
         mock_flow_run = MagicMock()
         mock_flow_run.name = "prudent-seagull"
         mock_flow_run.state.type.value = "COMPLETED"
@@ -238,17 +240,27 @@ def test_get_flow_run_status_valid_uuid(mock_trigger):
 
 
 @patch("app.api.routes.flows.get_latest_kpis")
-def test_get_latest_kpis_returns_summary(mock_kpis):
-    from app.api.routes.flows import KpiSummaryResponse
+def test_get_latest_kpis_returns_summary():
+    # ✅ Mocker google.cloud.storage.Client, pas la fonction route
+    fake_blob = MagicMock()
+    fake_blob.updated = datetime(2024, 1, 1, tzinfo=UTC)
+    fake_blob.download_as_bytes.return_value = json.dumps(
+        {
+            "status": "success",
+            "source": "processed/data.csv",
+            "computed_at": "2024-01-01T00:00:00Z",
+            "kpis": [{"kpi": "nombre_signalements", "value": 42}],
+        }
+    ).encode()
 
-    mock_kpis.return_value = KpiSummaryResponse(
-        status="success",
-        source="processed/data.csv",
-        computed_at="2024-01-01T00:00:00Z",
-        kpis=[{"kpi": "nombre_signalements", "value": 42}],
-    )
+    mock_bucket = MagicMock()
+    mock_bucket.list_blobs.return_value = [fake_blob]
 
-    response = client.get("/flows/latest-kpis")
+    mock_gcs_client = MagicMock()
+    mock_gcs_client.bucket.return_value = mock_bucket
+
+    with patch("google.cloud.storage.Client", return_value=mock_gcs_client):
+        response = client.get("/flows/latest-kpis")
 
     assert response.status_code == 200
     data = response.json()
