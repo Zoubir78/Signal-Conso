@@ -1,6 +1,6 @@
 from pathlib import Path
 
-DASHBOARD_PATH = Path("app/dashboard/dashboard.py")
+DASHBOARD_PATH = Path("src/app/dashboard/dashboard.py")
 
 
 def test_realtime_tab_is_inserted_next_to_overview():
