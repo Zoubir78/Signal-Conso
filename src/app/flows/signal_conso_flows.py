@@ -575,61 +575,47 @@ def flow_signalements_lus_reponse(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-@flow(
-    name="kpi-pipeline-flow",
-    description=(
-        "Pipeline Prefect complet Signal Conso : "
-        "extraction GCS → filtrage → calcul des 4 KPIs → publication."
-    ),
-    log_prints=True,
-)
+@flow(name="kpi-pipeline-flow", log_prints=True)
 def kpi_pipeline_flow(
     bucket_name: str = "",
     prefix: str = "",
-    reference_date: date | None = None,
     period: str = "Depuis le début du mois",
     region: str | None = None,
     department_label: str | None = None,
 ) -> dict[str, Any]:
+    logger = get_run_logger()
 
     bucket_name = bucket_name or os.getenv("GCS_BUCKET_NAME") or "clean_complaints"
     prefix = prefix or os.getenv("GCS_PROCESSED_PREFIX") or "processed/"
 
-    logger = get_run_logger()
-    logger.info(f"🚀 Démarrage pipeline KPI Signal Conso | bucket={bucket_name} | période={period}")
+    logger.info(f"Démarrage pipeline | bucket={bucket_name} | période={period}")
 
+    # ── Chargement des données une seule fois ────────────────────────────────
     client = get_gcs_client_task()
     blob_name = find_latest_blob_task(client, bucket_name, prefix)
 
     if blob_name is None:
-        logger.error("Aucun fichier trouvé dans GCS — arrêt du pipeline.")
         return {"error": "Aucun fichier GCS trouvé", "kpis": []}
 
-    raw_df = download_dataset_task(client, bucket_name, blob_name)
-    df = preprocess_task(raw_df)
-
-    df = apply_temporal_filter_task(df, reference_date=reference_date, period=period)
+    df = preprocess_task(download_dataset_task(client, bucket_name, blob_name))
+    df = apply_temporal_filter_task(df, period=period)
     df = apply_geo_filter_task(df, region=region, department_label=department_label)
 
     if df.empty:
-        logger.warning("DataFrame vide après filtrage — KPIs non calculables.")
         return {"error": "Aucune donnée après filtrage", "kpis": [], "source": blob_name}
 
-    kpis: list[dict[str, Any]] = []
-
-    kpis.append(flow_nombre_signalements(df))
-
-    transmis_results = flow_transmis_global(df, kpi_type="both")
-    if isinstance(transmis_results, list):
-        kpis.extend(transmis_results)
-    else:
-        kpis.append(transmis_results)
-
-    kpis.append(flow_signalements_lus_reponse(df))
+    # ── KPIs calculés directement via tasks (pas de sous-flows) ─────────────
+    # Les sous-flows sont indépendants (chargent leurs propres données).
+    # Dans le pipeline principal on appelle les tasks directement.
+    kpis: list[dict[str, Any]] = [
+        kpi_nombre_signalements_task(df),
+        kpi_signalements_transmis_task(df),
+        kpi_signalements_transmis_lus_task(df),
+        kpi_signalements_lus_reponse_task(df),
+    ]
 
     summary = publish_kpi_results_task(kpis, source_blob=blob_name)
-
-    logger.info("✅ Pipeline terminé avec succès.")
+    logger.info("Pipeline terminé avec succès.")
     return summary
 
 
