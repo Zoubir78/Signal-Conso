@@ -31,9 +31,9 @@ from prefect.runtime import deployment as prefect_runtime_deployment
 from prefect_gcp import GcpCredentials
 
 # -- Config --------------------------------------------------------------------
-GCS_BUCKET_NAME: str = os.getenv("GCS_BUCKET_NAME", "clean_complaints")
-GCS_PROCESSED_PREFIX: str = os.getenv("GCS_PROCESSED_PREFIX", "processed/")
-GCS_RESULTS_PREFIX: str = os.getenv("GCS_RESULTS_PREFIX", "prefect-results/")
+GCS_BUCKET_NAME: str = os.getenv("GCS_BUCKET_NAME") or "clean_complaints"
+GCS_PROCESSED_PREFIX: str = os.getenv("GCS_PROCESSED_PREFIX") or "processed/"
+GCS_RESULTS_PREFIX: str = os.getenv("GCS_RESULTS_PREFIX") or "prefect-results/"
 BOOL_TRUE_VALUES: frozenset[str] = frozenset({"1", "true", "t", "yes", "y", "oui", "vrai", "on"})
 
 
@@ -97,14 +97,21 @@ def get_gcs_client_task() -> storage.Client:
 
 @task(
     name="find-latest-blob",
-    description="Trouve le blob le plus recent dans le prefix GCS.",
     retries=3,
     retry_delay_seconds=10,
     tags=["gcs", "extract"],
 )
 def find_latest_blob_task(client: storage.Client, bucket_name: str, prefix: str) -> str | None:
     logger = get_run_logger()
-    logger.info(f"Recherche du blob le plus recent dans gs://{bucket_name}/{prefix}")
+
+    # Fallback défensif à l'intérieur de la task
+    bucket_name = bucket_name or os.getenv("GCS_BUCKET_NAME") or "clean_complaints"
+    prefix = prefix or os.getenv("GCS_PROCESSED_PREFIX") or "processed/"
+
+    logger.info(f"bucket_name='{bucket_name}' | prefix='{prefix}'")  # debug
+
+    if not bucket_name.strip():
+        raise ValueError("GCS_BUCKET_NAME est vide après fallback — vérifiez les Job Variables.")
 
     bucket = client.bucket(bucket_name)
     blobs = list(bucket.list_blobs(prefix=prefix))
@@ -474,29 +481,50 @@ def flow_nombre_signalements(df: pd.DataFrame) -> dict[str, Any]:
 
 @flow(
     name="flow-transmis-global",
-    description="Flow dédié aux KPI : signalements transmis / transmis lus.",
+    description="Flow KPI : signalements transmis / transmis lus.",
     log_prints=True,
 )
 def flow_transmis_global(
-    df: pd.DataFrame,
+    bucket_name: str = "",
+    prefix: str = "",
+    period: str = "Depuis le début du mois",
+    region: str | None = None,
+    department_label: str | None = None,
     kpi_type: str = "both",
 ) -> dict[str, Any] | list[dict[str, Any]]:
     logger = get_run_logger()
 
+    # Résolution des paramètres
+    bucket_name = bucket_name or os.getenv("GCS_BUCKET_NAME") or "clean_complaints"
+    prefix = prefix or os.getenv("GCS_PROCESSED_PREFIX") or "processed/"
+
+    # Chargement autonome des données
+    client = get_gcs_client_task()
+    blob_name = find_latest_blob_task(client, bucket_name, prefix)
+    if blob_name is None:
+        return {"error": "Aucun fichier GCS trouvé", "kpis": []}
+
+    raw_df = download_dataset_task(client, bucket_name, blob_name)
+    df = preprocess_task(raw_df)
+    df = apply_temporal_filter_task(df, period=period)
+    df = apply_geo_filter_task(df, region=region, department_label=department_label)
+
+    if df.empty:
+        return {"error": "Aucune donnée après filtrage", "kpis": []}
+
+    logger.info(f"Calcul KPI transmis — kpi_type='{kpi_type}'")
+
     if kpi_type == "transmis":
         return kpi_signalements_transmis_task(df)
-
     if kpi_type == "transmis_lus":
         return kpi_signalements_transmis_lus_task(df)
-
     if kpi_type == "both":
-        logger.info("Calcul des KPI 'transmis' et 'transmis_lus'.")
         return [
             kpi_signalements_transmis_task(df),
             kpi_signalements_transmis_lus_task(df),
         ]
 
-    raise ValueError(f"Valeur de kpi_type invalide : {kpi_type!r}")
+    raise ValueError(f"kpi_type invalide : {kpi_type!r}")
 
 
 @flow(
@@ -522,13 +550,16 @@ def flow_signalements_lus_reponse(df: pd.DataFrame) -> dict[str, Any]:
     log_prints=True,
 )
 def kpi_pipeline_flow(
-    bucket_name: str = GCS_BUCKET_NAME,
-    prefix: str = GCS_PROCESSED_PREFIX,
+    bucket_name: str = "",
+    prefix: str = "",
     reference_date: date | None = None,
     period: str = "Depuis le début du mois",
     region: str | None = None,
     department_label: str | None = None,
 ) -> dict[str, Any]:
+
+    bucket_name = bucket_name or os.getenv("GCS_BUCKET_NAME") or "clean_complaints"
+    prefix = prefix or os.getenv("GCS_PROCESSED_PREFIX") or "processed/"
 
     logger = get_run_logger()
     logger.info(f"🚀 Démarrage pipeline KPI Signal Conso | bucket={bucket_name} | période={period}")
