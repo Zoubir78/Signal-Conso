@@ -867,6 +867,81 @@ with tab_overview:
 
 
 # ══════════════════════════════════════════════
+# TAB 3 — CARTOGRAPHIE
+# ══════════════════════════════════════════════
+with tab_map:
+    st.markdown(
+        '<div class="sec-header">🗺️ Carte des signalements par département</div>',
+        unsafe_allow_html=True,
+    )
+
+    if filtered_df.empty or "dep_code" not in filtered_df.columns:
+        st.info("Données ou colonne dep_code absentes.")
+    else:
+        try:
+            from urllib.request import urlopen
+
+            with urlopen(
+                "https://france-geojson.gregoiredavid.fr/repo/departements.geojson"
+            ) as resp:
+                geojson = json.load(resp)
+
+            dep_counts = (
+                filtered_df["dep_code"]
+                .astype(str)
+                .str.strip()
+                .str.zfill(2)
+                .value_counts()
+                .reset_index()
+            )
+            dep_counts.columns = ["code", "count"]
+
+            fig = px.choropleth(
+                dep_counts,
+                geojson=geojson,
+                locations="code",
+                featureidkey="properties.code",
+                color="count",
+                color_continuous_scale=[[0, "#0d1117"], [0.3, "#1f6feb"], [1, "#58a6ff"]],
+                labels={"count": "Signalements"},
+                template="plotly_dark",
+            )
+            fig.update_geos(fitbounds="locations", visible=False)
+            fig.update_layout(
+                paper_bgcolor="#0d1117",
+                geo_bgcolor="#0d1117",
+                margin=dict(r=0, t=0, l=0, b=0),
+                height=550,
+                coloraxis_colorbar=dict(
+                    title="",
+                    tickfont=dict(color="#8b949e"),
+                    bgcolor="#161b22",
+                    bordercolor="#21262d",
+                ),
+            )
+            st.plotly_chart(fig, width="stretch")
+
+            # Top 10 départements
+            st.markdown(
+                '<div class="sec-header">🏆 Top 10 départements</div>', unsafe_allow_html=True
+            )
+            top_deps = dep_counts.sort_values("count", ascending=False).head(10)
+            max_cnt = top_deps["count"].max()
+            html = '<table class="lb-table"><thead><tr><th>#</th><th>Département</th><th>Signalements</th><th>Part</th></tr></thead><tbody>'
+            for i, row in enumerate(top_deps.itertuples(), 1):
+                pct = row.count / dep_counts["count"].sum() * 100
+                bar_w = int(row.count / max_cnt * 120)
+                html += f'<tr><td style="color:#8b949e">{i}</td><td>{row.code}</td>'
+                html += f'<td><span style="color:#58a6ff;font-weight:600">{row.count:,}</span></td>'
+                html += f'<td><span class="bar-fill" style="width:{bar_w}px"></span> <span style="color:#8b949e">{pct:.1f}%</span></td></tr>'
+            html += "</tbody></table>"
+            st.markdown(html, unsafe_allow_html=True)
+
+        except Exception as e:
+            st.error(f"Erreur carte : {e}")
+
+
+# ══════════════════════════════════════════════
 # TAB 4 — PRÉDICTION
 # ══════════════════════════════════════════════
 with tab_predict:
