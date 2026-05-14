@@ -470,12 +470,29 @@ def publish_kpi_results_task(kpis: list[dict[str, Any]], source_blob: str) -> di
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-@flow(
-    name="flow-nombre-signalements",
-    description="Flow dédié au KPI : Nombre total de signalements.",
-    log_prints=True,
-)
-def flow_nombre_signalements(df: pd.DataFrame) -> dict[str, Any]:
+@flow(name="flow-nombre-signalements", log_prints=True)
+def flow_nombre_signalements(
+    bucket_name: str = "",
+    prefix: str = "",
+    period: str = "Depuis le début du mois",
+    region: str | None = None,
+    department_label: str | None = None,
+) -> dict[str, Any]:
+    bucket_name = bucket_name or os.getenv("GCS_BUCKET_NAME") or "clean_complaints"
+    prefix = prefix or os.getenv("GCS_PROCESSED_PREFIX") or "processed/"
+
+    client = get_gcs_client_task()
+    blob_name = find_latest_blob_task(client, bucket_name, prefix)
+    if blob_name is None:
+        return {"error": "Aucun fichier GCS trouvé"}
+
+    df = preprocess_task(download_dataset_task(client, bucket_name, blob_name))
+    df = apply_temporal_filter_task(df, period=period)
+    df = apply_geo_filter_task(df, region=region, department_label=department_label)
+
+    if df.empty:
+        return {"error": "Aucune donnée après filtrage"}
+
     return kpi_nombre_signalements_task(df)
 
 
@@ -527,12 +544,29 @@ def flow_transmis_global(
     raise ValueError(f"kpi_type invalide : {kpi_type!r}")
 
 
-@flow(
-    name="flow-signalements-lus-reponse",
-    description="Flow dédié au KPI : Part des signalements lus ayant une réponse.",
-    log_prints=True,
-)
-def flow_signalements_lus_reponse(df: pd.DataFrame) -> dict[str, Any]:
+@flow(name="flow-signalements-lus-reponse", log_prints=True)
+def flow_signalements_lus_reponse(
+    bucket_name: str = "",
+    prefix: str = "",
+    period: str = "Depuis le début du mois",
+    region: str | None = None,
+    department_label: str | None = None,
+) -> dict[str, Any]:
+    bucket_name = bucket_name or os.getenv("GCS_BUCKET_NAME") or "clean_complaints"
+    prefix = prefix or os.getenv("GCS_PROCESSED_PREFIX") or "processed/"
+
+    client = get_gcs_client_task()
+    blob_name = find_latest_blob_task(client, bucket_name, prefix)
+    if blob_name is None:
+        return {"error": "Aucun fichier GCS trouvé"}
+
+    df = preprocess_task(download_dataset_task(client, bucket_name, blob_name))
+    df = apply_temporal_filter_task(df, period=period)
+    df = apply_geo_filter_task(df, region=region, department_label=department_label)
+
+    if df.empty:
+        return {"error": "Aucune donnée après filtrage"}
+
     return kpi_signalements_lus_reponse_task(df)
 
 
