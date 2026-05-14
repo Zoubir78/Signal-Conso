@@ -496,31 +496,6 @@ def download_model(blob_name: str, local: str = "/tmp/tmp_model.joblib") -> str:
     return local
 
 
-def _prefect_run_params(
-    *,
-    bucket_name: str,
-    prefix: str,
-    reference_date: date | None,
-    period: str,
-    region: str | None,
-    department_label: str | None,
-    kpi_type: str | None = None,
-) -> dict[str, Any]:
-    params: dict[str, Any] = {
-        "bucket_name": bucket_name.strip() or GCS_BUCKET_NAME,
-        "prefix": prefix.strip() or "processed/",
-        "reference_date": reference_date.isoformat() if reference_date else None,
-        "period": period,
-        "region": region.strip() if isinstance(region, str) else region,
-        "department_label": department_label.strip()
-        if isinstance(department_label, str)
-        else department_label,
-    }
-    if kpi_type:
-        params["kpi_type"] = kpi_type
-    return {k: v for k, v in params.items() if v not in (None, "")}
-
-
 def _fmt_dt(value: Any) -> str:
     if value in (None, ""):
         return "—"
@@ -531,11 +506,6 @@ def _fmt_dt(value: Any) -> str:
         return ts.tz_convert("Europe/Paris").strftime("%d/%m/%Y %H:%M")
     except Exception:
         return str(value)
-
-
-def _escape_md_cell(value: Any) -> str:
-    text = "—" if value in (None, "") else str(value)
-    return text.replace("|", r"\|").replace("\n", " ")
 
 
 def _load_prefect_summaries(limit: int = 20) -> list[dict[str, Any]]:
@@ -600,35 +570,6 @@ def _prefect_runs_dataframe(limit: int = 20) -> pd.DataFrame:
     return df_runs
 
 
-def _prefect_result_markdown(result: dict[str, Any]) -> str:
-    """Génère le rendu Markdown des résultats Prefect."""
-    status_raw = str(result.get("status", result.get("state", "success"))).strip().lower()
-    status_icon = (
-        "🟢"
-        if status_raw in ["success", "completed"]
-        else "🔴"
-        if status_raw in ["failed", "crashed"]
-        else "🔵"
-    )
-
-    lines = [
-        f"### {status_icon} Dernier résultat Prefect",
-        f"**Déploiement** : `{result.get('deployment_name', '—')}`",
-        f"**Statut** : {status_raw.title()}",
-        f"**Exécuté le** : {result.get('computed_at', '—')}",
-    ]
-
-    kpis = result.get("kpis")
-    if isinstance(kpis, list) and kpis:
-        lines.extend(["", "| KPI | Valeur | Détail |", "|---|---:|---|"])
-        for k in kpis:
-            label = k.get("label", "—")
-            val = k.get("value_pct") or k.get("value") or "N/A"
-            det = f"{k['numerator']} / {k['denominator']}" if "numerator" in k else "—"
-            lines.append(f"| {label} | {val} | {det} |")
-    return "\n".join(lines)
-
-
 # ─────────────────────────────────────────────
 # API HELPER
 # ─────────────────────────────────────────────
@@ -686,31 +627,6 @@ def predict_api(text: str, model_blob: str | None = None) -> dict:
 @st.cache_resource
 def _gcs() -> storage.Client:
     return storage.Client()
-
-
-def _run_flow_via_api(selection_key: str, parameters: dict[str, Any]) -> dict[str, Any]:
-    config = PREFECT_FLOW_MAPPING.get(selection_key)
-    if not config:
-        raise ValueError(f"Config introuvable pour {selection_key}")
-
-    url = f"{FLOWS_API_URL}{config['endpoint']}"
-    clean_params = {k: v for k, v in parameters.items() if v not in (None, "")}
-
-    if "reference_date" in clean_params and isinstance(clean_params["reference_date"], date):
-        clean_params["reference_date"] = clean_params["reference_date"].isoformat()
-
-    if config["method"] == "POST":
-        resp = requests.post(
-            url,
-            json=clean_params if config["type"] == "json" else None,
-            params=None if config["type"] == "json" else clean_params,
-            timeout=60,
-        )
-    else:
-        resp = requests.get(url, params=clean_params, timeout=60)
-
-    resp.raise_for_status()
-    return resp.json()
 
 
 # ─────────────────────────────────────────────
