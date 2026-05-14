@@ -5,12 +5,13 @@ import json
 import os
 import sys
 from collections import Counter
-from datetime import datetime
+from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import plotly.express as px
 import requests
 import streamlit as st
 from google.cloud import storage
@@ -650,6 +651,219 @@ tabs = st.tabs(
     ]
 )
 tab_overview, tab_flows, tab_map, tab_predict, tab_ml, tab_pipeline, tab_gcs = tabs
+
+
+# ══════════════════════════════════════════════
+# TAB 1 — VUE D'ENSEMBLE
+# ══════════════════════════════════════════════
+with tab_overview:
+    if df.empty:
+        st.warning("Aucun dataset trouvé dans `processed/` sur GCS.")
+    else:
+        # ── Détection / normalisation de la colonne date ─────────────
+        DATE_COL_CANDIDATES = ["creationdate", "creation_date", "date_creation", "created_at"]
+        date_col = next((c for c in DATE_COL_CANDIDATES if c in df.columns), None)
+
+        # On fixe la date de référence à AUJOURD'HUI par défaut
+        ref_date = date.today()
+
+        if date_col is None:
+            st.warning("Aucune colonne de date trouvée dans le dataset.")
+            working_df = df.copy()
+        else:
+            working_df = df.copy()
+            working_df[date_col] = pd.to_datetime(working_df[date_col], errors="coerce")
+            working_df["record_date"] = working_df[date_col].dt.normalize()
+
+        # ── Filtres ──────────────────────────────────────────────────
+        f1, f2, f3, f4 = st.columns([1.2, 1.2, 1.5, 1.5])
+
+        with f1:
+            sel_date = st.date_input(
+                "Date de référence",
+                value=ref_date,  # Affichera toujours aujourd'hui au refresh
+                format="DD/MM/YYYY",
+            )
+
+        with f2:
+            period = st.selectbox(
+                "Période",
+                ["Depuis le début du mois", "7 derniers jours", "Toutes les données"],
+                index=0,  # Par défaut sur le mois en cours
+            )
+
+        with f3:
+            regions = ["Toutes les régions"]
+            if "reg_name" in working_df.columns:
+                regions += sorted(working_df["reg_name"].dropna().astype(str).unique().tolist())
+            sel_region = st.selectbox("Région", regions)
+
+        # Filtrage des données
+        filtered_df = working_df.copy()
+
+        if "record_date" in filtered_df.columns:
+            filtered_df = filtered_df[filtered_df["record_date"].notna()].copy()
+            ref = pd.Timestamp(sel_date)
+
+            if period == "Depuis le début du mois":
+                start = ref.replace(day=1)
+                end = ref
+            elif period == "7 derniers jours":
+                start = ref - pd.Timedelta(days=6)
+                end = ref
+            else:
+                start = filtered_df["record_date"].min()
+                end = ref
+
+            filtered_df = filtered_df[
+                (filtered_df["record_date"] >= start.normalize())
+                & (filtered_df["record_date"] <= end.normalize())
+            ]
+
+            st.caption(
+                f"Filtre actif : {start.date()} → {end.date()} · {len(filtered_df):,} ligne(s)"
+            )
+
+        if sel_region != "Toutes les régions" and "reg_name" in filtered_df.columns:
+            filtered_df = filtered_df[filtered_df["reg_name"].astype(str) == sel_region]
+
+        with f4:
+            if "department_label" in filtered_df.columns:
+                dept_choices = ["Tous les départements"] + sorted(
+                    filtered_df["department_label"].dropna().astype(str).unique().tolist()
+                )
+            else:
+                dept_choices = ["Tous les départements"]
+            sel_dept = st.selectbox("Département", dept_choices)
+
+        if sel_dept != "Tous les départements" and "department_label" in filtered_df.columns:
+            filtered_df = filtered_df[filtered_df["department_label"] == sel_dept]
+
+        st.divider()
+
+        if filtered_df.empty:
+            st.info("Aucune donnée pour les filtres sélectionnés.")
+        else:
+            # ── KPIs ──────────────────────────────────────────────────
+            total = len(filtered_df)
+
+            # Utilisation de .get() ou vérification pour éviter les erreurs de colonnes manquantes
+            def get_sum(col):
+                return (
+                    int(_bool_series(filtered_df[col]).sum()) if col in filtered_df.columns else 0
+                )
+
+            transmis = get_sum("signalement_transmis")
+            lus = get_sum("signalement_lu")
+            reponses = get_sum("signalement_reponse")
+
+            r_trans = transmis / total if total else 0
+            r_lus = lus / transmis if transmis else 0
+            r_rep = reponses / lus if lus else 0
+
+            k1, k2, k3, k4 = st.columns(4)
+            k1.metric("Signalements", f"{total:,}")
+            k2.metric("Taux transmission", f"{r_trans:.1%}")
+            k3.metric("Taux lecture", f"{r_lus:.1%}")
+            k4.metric("Taux réponse", f"{r_rep:.1%}")
+
+            for rate, label, num, den in [
+                (r_trans, "Transmission", transmis, total),
+                (r_lus, "Lecture", lus, transmis),
+                (r_rep, "Réponse", reponses, lus),
+            ]:
+                st.markdown(
+                    f"<div style='font-size:11px;color:#8b949e;margin-top:8px;'>{label} — {num:,} / {den:,}</div>",
+                    unsafe_allow_html=True,
+                )
+                st.progress(min(max(rate, 0.0), 1.0))
+
+            st.divider()
+
+            # ── Évolution temporelle ──────────────────────────────────
+            st.markdown(
+                '<div class="sec-header">📈 Évolution des signalements</div>',
+                unsafe_allow_html=True,
+            )
+            if "record_date" in filtered_df.columns:
+                timeline = (
+                    filtered_df.groupby(filtered_df["record_date"].dt.date)
+                    .size()
+                    .reset_index(name="count")
+                    .rename(columns={"record_date": "date"})
+                )
+
+                # Utilisation de x="date" car on vient de renommer la colonne
+                fig = px.area(
+                    timeline,
+                    x="date",
+                    y="count",
+                    color_discrete_sequence=["#1f6feb"],
+                    template="plotly_dark",
+                )
+                fig.update_layout(
+                    paper_bgcolor="#0d1117",
+                    plot_bgcolor="#0d1117",
+                    margin=dict(l=0, r=0, t=10, b=0),
+                    height=260,
+                    showlegend=False,
+                )
+                st.plotly_chart(fig, width="stretch")
+
+            # ── Top catégories et Mots-clés ───────────────────────────
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.markdown(
+                    '<div class="sec-header">📂 Top catégories</div>', unsafe_allow_html=True
+                )
+                if "category" in filtered_df.columns:
+                    cat_s = _frequency(filtered_df, "category", limit=12)
+                    if not cat_s.empty:
+                        fig = px.bar(
+                            x=cat_s.values, y=cat_s.index, orientation="h", template="plotly_dark"
+                        )
+                        fig.update_layout(
+                            yaxis=dict(autorange="reversed"),
+                            height=340,
+                            margin=dict(l=0, r=0, t=10, b=0),
+                        )
+                        st.plotly_chart(fig, width="stretch")
+
+            with col_b:
+                st.markdown('<div class="sec-header">🔑 Mots-clés</div>', unsafe_allow_html=True)
+                kw = _keyword_freq(filtered_df, limit=15)
+                if not kw.empty:
+                    fig = px.bar(
+                        x=kw.values,
+                        y=kw.index,
+                        orientation="h",
+                        color_discrete_sequence=["#3fb950"],
+                        template="plotly_dark",
+                    )
+                    fig.update_layout(
+                        yaxis=dict(autorange="reversed"),
+                        height=340,
+                        margin=dict(l=0, r=0, t=10, b=0),
+                    )
+                    st.plotly_chart(fig, width="stretch")
+
+            # ── Aperçu données ────────────────────────────────────────
+            st.markdown(
+                '<div class="sec-header">📋 Aperçu des données</div>', unsafe_allow_html=True
+            )
+            preview_cols = [
+                c
+                for c in [
+                    "record_date",
+                    "department_label",
+                    "reg_name",
+                    "category",
+                    "status",
+                    "clean_text",
+                ]
+                if c in filtered_df.columns
+            ]
+            st.dataframe(filtered_df[preview_cols].head(30), width="stretch", height=280)
 
 
 # ══════════════════════════════════════════════
