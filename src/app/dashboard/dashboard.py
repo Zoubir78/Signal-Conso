@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import json
 import os
 import sys
+from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 
+import pandas as pd
 import requests
 import streamlit as st
+from google.cloud import storage
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
@@ -185,6 +190,45 @@ hr { border-color: #21262d; }
 
 
 # ─────────────────────────────────────────────
+# GCS HELPERS
+# ─────────────────────────────────────────────
+@st.cache_resource
+def _gcs() -> storage.Client:
+    return storage.Client()
+
+
+@st.cache_data(ttl=120)
+def list_blobs(prefix: str) -> list[str]:
+    return [b.name for b in _gcs().bucket(GCS_BUCKET_NAME).list_blobs(prefix=prefix)]
+
+
+@st.cache_data(ttl=120)
+def load_latest_dataset() -> tuple[pd.DataFrame, str | None]:
+    blobs = list(_gcs().bucket(GCS_BUCKET_NAME).list_blobs(prefix="processed/"))
+    if not blobs:
+        return pd.DataFrame(), None
+    latest = max(blobs, key=lambda b: b.updated or datetime.min.replace(tzinfo=datetime.UTC))
+    data = latest.download_as_bytes()
+    return pd.read_csv(BytesIO(data)), latest.name
+
+
+@st.cache_data(ttl=120)
+def load_evaluation_report() -> dict | None:
+    try:
+        blob = _gcs().bucket(GCS_BUCKET_NAME).blob("models/evaluation_report.json")
+        if blob.exists():
+            return json.loads(blob.download_as_text())
+    except Exception:
+        pass
+    return None
+
+
+def download_model(blob_name: str, local: str = "/tmp/tmp_model.joblib") -> str:
+    _gcs().bucket(GCS_BUCKET_NAME).blob(blob_name).download_to_filename(local)
+    return local
+
+
+# ─────────────────────────────────────────────
 # API HELPER
 # ─────────────────────────────────────────────
 PREDICTION_URL = os.getenv("PREDICTION_URL", "http://localhost:8000/predictions")
@@ -291,3 +335,30 @@ with tab_predict:
                 except Exception as e:
                     st.error(f"Erreur API : {e}")
                     st.info(f"Vérifiez que l'API est démarrée sur `{PREDICTION_URL}`")
+
+
+# ══════════════════════════════════════════════
+# TAB 7 — GCS
+# ══════════════════════════════════════════════
+with tab_gcs:
+    st.markdown(
+        f'<div class="sec-header">☁️ Explorateur GCS — {GCS_BUCKET_NAME}</div>',
+        unsafe_allow_html=True,
+    )
+
+    g1, g2 = st.columns([1, 3])
+    with g1:
+        prefix = st.radio(
+            "Dossier",
+            ["raw/", "processed/", "models/", "predictions/"],
+            label_visibility="collapsed",
+        )
+    with g2:
+        blobs = list_blobs(prefix)
+        if blobs:
+            blob_df = pd.DataFrame({"Fichier": blobs})
+            blob_df["Extension"] = blob_df["Fichier"].apply(lambda x: Path(x).suffix or "–")
+            st.dataframe(blob_df, width="stretch", height=400)
+            st.caption(f"{len(blobs)} fichier(s) dans `{prefix}`")
+        else:
+            st.info(f"Aucun fichier dans `{prefix}`.")
