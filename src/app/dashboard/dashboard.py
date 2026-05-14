@@ -474,6 +474,39 @@ PREDICTION_URL = os.getenv("PREDICTION_URL", "http://localhost:8000/predictions"
 MODEL_REFRESH_SECONDS = 90
 
 
+def _model_label(blob_name: str) -> str:
+    blob_name = blob_name.replace("\\", "/")
+    if blob_name == "models/model.joblib":
+        return "🟢 Modèle actif · latest"
+    if blob_name.startswith("models/model_") and blob_name.endswith(".joblib"):
+        stamp = Path(blob_name).stem.replace("model_", "")
+        return f"📦 Snapshot · {stamp}"
+    if "/runs/" in blob_name:
+        parts = blob_name.split("/")
+        run_date = parts[2] if len(parts) >= 4 else "run"
+        model_name = Path(blob_name).stem
+        return f"🧪 Run {run_date} · {model_name}"
+    return f"📄 {Path(blob_name).name}"
+
+
+@st.cache_data(ttl=MODEL_REFRESH_SECONDS)
+def list_available_models() -> list[str]:
+    blobs = [b for b in list_blobs("models/") if b.endswith(".joblib")]
+    if not blobs:
+        return []
+
+    def _sort_key(blob: str) -> tuple:
+        if blob == "models/model.joblib":
+            return (0, "")
+        if blob.startswith("models/model_"):
+            return (1, blob, "")
+        if "/runs/" in blob:
+            return (2, blob, "")
+        return (3, blob, "")
+
+    return sorted(dict.fromkeys(blobs), key=_sort_key)
+
+
 def predict_api(text: str, model_blob: str | None = None) -> dict:
     payload = {
         "text": text,
@@ -486,6 +519,105 @@ def predict_api(text: str, model_blob: str | None = None) -> dict:
     r = requests.post(PREDICTION_URL, json=payload, timeout=30)
     r.raise_for_status()
     return r.json()
+
+
+# ─────────────────────────────────────────────
+# SIDEBAR
+# ─────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("## 🛡️ SignalConso")
+    st.markdown("**Intelligence Platform**")
+    st.caption("Analyse, monitoring et classification des signalements")
+    st.divider()
+
+    st.markdown("#### ⚙️ Connexions")
+    st.markdown(f"**API prédiction** `{PREDICTION_URL}`")
+    st.markdown(f"**Bucket GCS** `{GCS_BUCKET_NAME}`")
+    st.markdown(f"**Modèle par défaut** `{DEFAULT_MODEL_VER}`")
+
+    if st.button("🔄 Rafraîchir les artefacts", width="stretch"):
+        st.cache_data.clear()
+        st.rerun()
+
+    st.divider()
+
+    report = load_evaluation_report()
+    if report:
+        st.markdown("#### 🏆 Dernier run ML")
+        st.markdown(f"**Date** `{report.get('date', '–')}`")
+        st.markdown(f"**Best** `{report.get('best_model', '–')}`")
+        lb = report.get("leaderboard", [])
+        if lb:
+            best_acc = lb[0].get("accuracy", 0)
+            st.metric("Accuracy", f"{best_acc:.2%}")
+    else:
+        st.info("Aucun rapport d'évaluation trouvé dans GCS.")
+
+    st.divider()
+
+    st.markdown("#### 🤖 Modèle actif")
+    available_models = list_available_models()
+    if available_models:
+        default_index = 0
+        if (
+            "selected_model_blob" not in st.session_state
+            or st.session_state["selected_model_blob"] not in available_models
+        ):
+            st.session_state["selected_model_blob"] = available_models[0]
+        else:
+            default_index = available_models.index(st.session_state["selected_model_blob"])
+
+        selected_model_blob = st.selectbox(
+            "Choisir le modèle de classification",
+            available_models,
+            index=default_index,
+            format_func=_model_label,
+            key="selected_model_blob",
+        )
+        st.caption(f"Modèle utilisé pour l'onglet Prédiction : {Path(selected_model_blob).name}")
+    else:
+        st.warning("Aucun modèle .joblib trouvé dans `models/`.")
+        st.session_state["selected_model_blob"] = DEFAULT_MODEL_PATH
+        selected_model_blob = DEFAULT_MODEL_PATH
+
+    st.divider()
+
+    st.divider()
+
+    st.markdown("#### ⚡ Raccourcis")
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("🏠 Home", width="stretch"):
+            st.session_state["active_tab_hint"] = "overview"
+            st.rerun()
+    with c2:
+        if st.button("📦 GCS", width="stretch"):
+            st.session_state["active_tab_hint"] = "gcs"
+            st.rerun()
+
+    st.caption("Le modèle sélectionné sera transmis à l’API de prédiction.")
+
+# ─────────────────────────────────────────────
+# HEADER
+# ─────────────────────────────────────────────
+st.markdown(
+    """
+<div style="display:flex;align-items:center;gap:16px;margin-bottom:8px;">
+  <div style="font-size:38px;font-weight:800;color:#e6edf3;letter-spacing:-1px;">
+    Signal<span style="color:#1f6feb;">Conso</span>
+  </div>
+  <div style="background:#1f6feb22;border:1px solid #1f6feb44;border-radius:20px;
+              padding:4px 14px;font-size:12px;color:#58a6ff;font-weight:600;
+              font-family:'DM Mono',monospace;">
+    INTELLIGENCE PLATFORM
+  </div>
+</div>
+<div style="color:#8b949e;font-size:14px;margin-bottom:24px;">
+  Analyse · Classification ML · Monitoring · Pipeline GCS + BigQuery + dbt
+</div>
+""",
+    unsafe_allow_html=True,
+)
 
 
 # ─────────────────────────────────────────────
