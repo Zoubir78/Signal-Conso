@@ -1,13 +1,29 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
+import requests
 import streamlit as st
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+
+# ─────────────────────────────────────────────
+# CONFIG & API URLS
+# ─────────────────────────────────────────────
+API_BASE_URL = os.getenv("API_URL", "http://api:8000").rstrip("/")
+PREDICTION_URL = f"{API_BASE_URL}/predictions/"
+FLOWS_API_URL = f"{API_BASE_URL}/flows"
+
+GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "clean_complaints")
+GCS_RESULTS_PREFIX = os.getenv("PREFECT_RESULTS_PREFIX", "prefect-results/")
+DEFAULT_MODEL_PATH = os.getenv("MODEL_PATH", "models/model.joblib")
+DEFAULT_MODEL_VER = os.getenv("MODEL_VERSION", "logreg-v1")
+MODEL_REFRESH_SECONDS = 90
 
 
 # ─────────────────────────────────────────────
@@ -166,3 +182,112 @@ hr { border-color: #21262d; }
 """,
     unsafe_allow_html=True,
 )
+
+
+# ─────────────────────────────────────────────
+# API HELPER
+# ─────────────────────────────────────────────
+PREDICTION_URL = os.getenv("PREDICTION_URL", "http://localhost:8000/predictions")
+MODEL_REFRESH_SECONDS = 90
+
+
+def predict_api(text: str, model_blob: str | None = None) -> dict:
+    payload = {
+        "text": text,
+        "model": model_blob,
+        "model_blob": model_blob,
+        "model_path": model_blob,
+        "model_version": Path(model_blob).stem if model_blob else None,
+    }
+    payload = {k: v for k, v in payload.items() if v is not None}
+    r = requests.post(PREDICTION_URL, json=payload, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+
+# ─────────────────────────────────────────────
+# TABS
+# ─────────────────────────────────────────────
+tabs = st.tabs(
+    [
+        "📋 Vue d'ensemble",
+        "⏱️ Flows temps réel",
+        "🗺️ Cartographie",
+        "🤖 Prédiction",
+        "🧠 Modèles ML",
+        "⚙️ Pipeline",
+        "☁️ GCS",
+    ]
+)
+tab_overview, tab_flows, tab_map, tab_predict, tab_ml, tab_pipeline, tab_gcs = tabs
+
+
+# ══════════════════════════════════════════════
+# TAB 4 — PRÉDICTION
+# ══════════════════════════════════════════════
+with tab_predict:
+    st.markdown(
+        '<div class="sec-header">🤖 Classification de signalement</div>', unsafe_allow_html=True
+    )
+
+    selected_model_blob = st.session_state.get("selected_model_blob", DEFAULT_MODEL_PATH)
+    if not selected_model_blob:
+        selected_model_blob = DEFAULT_MODEL_PATH
+
+    st.markdown(
+        f"""
+        <div style="background:#161b22;border:1px solid #21262d;border-radius:10px;padding:14px 16px;margin-bottom:16px;">
+          <div style="font-size:13px;color:#8b949e;line-height:1.8;">
+            <b style="color:#e6edf3;">Modèle actif :</b> {Path(selected_model_blob).name}<br>
+            <span style="color:#58a6ff;">Endpoint :</span> <code>{PREDICTION_URL}</code><br>
+            <span style="color:#8b949e;">Sélectionnez un modèle dans la sidebar pour changer le comportement de la classification.</span>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    col_left, col_right = st.columns([3, 1])
+    with col_left:
+        user_text = st.text_area(
+            "Décrivez le signalement",
+            height=150,
+            placeholder="Ex : j'ai commandé un produit sur un site internet et je n'ai jamais reçu ma commande...",
+        )
+    with col_right:
+        st.markdown("<br>", unsafe_allow_html=True)
+        run_pred = st.button("🚀 Classifier", width="stretch")
+        st.markdown("---")
+        st.markdown(
+            f"<div style='font-size:11px;color:#8b949e'>Modèle : `{Path(selected_model_blob).name}`</div>",
+            unsafe_allow_html=True,
+        )
+
+    if run_pred:
+        if not user_text.strip():
+            st.warning("Veuillez saisir un texte.")
+        else:
+            with st.spinner("Analyse en cours…"):
+                try:
+                    result = predict_api(user_text, selected_model_blob)
+                    cat = result.get("predicted_category") or result.get("category", "–")
+                    conf = result.get("confidence", 0)
+                    api_model = (
+                        result.get("model_version")
+                        or result.get("model")
+                        or Path(selected_model_blob).stem
+                    )
+
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    r1, r2, r3 = st.columns(3)
+                    r1.metric("Catégorie prédite", cat)
+                    r2.metric("Confiance", f"{conf:.2%}")
+                    r3.metric("Modèle", api_model)
+
+                    st.success(f"Classification lancée avec **{Path(selected_model_blob).name}**.")
+
+                    with st.expander("Réponse API complète"):
+                        st.json(result)
+                except Exception as e:
+                    st.error(f"Erreur API : {e}")
+                    st.info(f"Vérifiez que l'API est démarrée sur `{PREDICTION_URL}`")
