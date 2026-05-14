@@ -1,6 +1,6 @@
 from pathlib import Path
 
-DASHBOARD_PATH = Path("/mnt/data/dashboard.py")
+DASHBOARD_PATH = Path(__file__).parent.parent / "dashboard.py"
 
 
 def test_realtime_tab_is_inserted_next_to_overview_and_prefect_sidebar_removed():
