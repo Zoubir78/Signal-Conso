@@ -31,9 +31,9 @@ from prefect.runtime import deployment as prefect_runtime_deployment
 from prefect_gcp import GcpCredentials
 
 # -- Config --------------------------------------------------------------------
-GCS_BUCKET_NAME: str = os.getenv("GCS_BUCKET_NAME", "clean_complaints")
-GCS_PROCESSED_PREFIX: str = os.getenv("GCS_PROCESSED_PREFIX", "processed/")
-GCS_RESULTS_PREFIX: str = os.getenv("GCS_RESULTS_PREFIX", "prefect-results/")
+GCS_BUCKET_NAME: str = os.getenv("GCS_BUCKET_NAME") or "clean_complaints"
+GCS_PROCESSED_PREFIX: str = os.getenv("GCS_PROCESSED_PREFIX") or "processed/"
+GCS_RESULTS_PREFIX: str = os.getenv("GCS_RESULTS_PREFIX") or "prefect-results/"
 BOOL_TRUE_VALUES: frozenset[str] = frozenset({"1", "true", "t", "yes", "y", "oui", "vrai", "on"})
 
 
@@ -104,13 +104,13 @@ def get_gcs_client_task() -> storage.Client:
 )
 def find_latest_blob_task(client: storage.Client, bucket_name: str, prefix: str) -> str | None:
     logger = get_run_logger()
-    logger.info(f"Recherche du blob le plus recent dans gs://{bucket_name}/{prefix}")
+    logger.info(f"bucket_name='{bucket_name}' | prefix='{prefix}'")  # ← debug
 
     if not bucket_name or not bucket_name.strip():
-        raise ValueError("GCS_BUCKET_NAME est vide.")
+        raise ValueError("GCS_BUCKET_NAME est vide. Vérifiez les Job Variables Prefect.")
 
     if not prefix or not prefix.strip():
-        raise ValueError("GCS_PROCESSED_PREFIX est vide.")
+        raise ValueError("GCS_PROCESSED_PREFIX est vide. Vérifiez les Job Variables Prefect.")
 
     bucket = client.bucket(bucket_name)
     blobs = list(bucket.list_blobs(prefix=prefix))
