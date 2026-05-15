@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 
 import pandas as pd
 import requests
@@ -9,22 +9,17 @@ import requests
 def extract_from_signalconso_api(
     api_url: str,
     limit: int = 100_000,
-    date_from: date | None = None,  # ← nouveau paramètre
+    date_from: date | None = None,
 ) -> pd.DataFrame:
     page_size = 100
     offset = 0
     rows = []
 
-    # Filtre sur 2 ans de données si pas de date précisée
-    if date_from is None:
-        date_from = date.today() - timedelta(days=730)
-
     while len(rows) < limit:
         params = {
             "limit": page_size,
             "offset": offset,
-            "order_by": "-dateCreation",
-            "where": f"dateCreation >= '{date_from.isoformat()}'",  # ← filtre API
+            "order_by": "-date_creation",  # ← snake_case, sans filtre where
         }
         response = requests.get(api_url, params=params, timeout=60)
         response.raise_for_status()
@@ -34,4 +29,16 @@ def extract_from_signalconso_api(
         rows.extend(records)
         offset += page_size
 
-    return pd.json_normalize(rows[:limit])
+    df = pd.json_normalize(rows[:limit])
+
+    # Filtre de date en local sur pandas (plus fiable que l'API)
+    if date_from and not df.empty:
+        date_col = next(
+            (c for c in df.columns if "date" in c.lower() and "creation" in c.lower()),
+            None,
+        )
+        if date_col:
+            df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+            df = df[df[date_col].dt.date >= date_from].reset_index(drop=True)
+
+    return df
