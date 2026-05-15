@@ -19,7 +19,7 @@ def extract_from_signalconso_api(
         params = {
             "limit": page_size,
             "offset": offset,
-            "order_by": "-date_creation",  # ← snake_case, sans filtre where
+            "order_by": "creationdate",
         }
         response = requests.get(api_url, params=params, timeout=60)
         response.raise_for_status()
