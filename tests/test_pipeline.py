@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -197,7 +197,10 @@ def test_run_pipeline_success(
     mock_train_metrics,
 ):
     fixed_today = datetime(2024, 1, 15)
-    monkeypatch.setattr("scripts.pipeline.datetime", SimpleNamespace(utcnow=lambda: fixed_today))
+    fixed_today = datetime(2024, 1, 15, tzinfo=UTC)
+    monkeypatch.setattr(
+        "scripts.pipeline.datetime", SimpleNamespace(now=lambda tz=None: fixed_today)
+    )
     monkeypatch.chdir(tmp_path)
 
     mock_extract = MagicMock(return_value=sample_raw_df)
@@ -256,8 +259,10 @@ def test_run_pipeline_no_model_success(
     sample_raw_df,
     sample_mart_df,
 ):
-    fixed_today = datetime(2024, 1, 15)
-    monkeypatch.setattr("scripts.pipeline.datetime", SimpleNamespace(utcnow=lambda: fixed_today))
+    fixed_today = datetime(2024, 1, 15, tzinfo=UTC)
+    monkeypatch.setattr(
+        "scripts.pipeline.datetime", SimpleNamespace(now=lambda tz=None: fixed_today)
+    )
     monkeypatch.chdir(tmp_path)
 
     monkeypatch.setattr(
@@ -296,8 +301,10 @@ def test_run_pipeline_dbt_failure(
     mock_settings,
     sample_raw_df,
 ):
-    fixed_today = datetime(2024, 1, 15)
-    monkeypatch.setattr("scripts.pipeline.datetime", SimpleNamespace(utcnow=lambda: fixed_today))
+    fixed_today = datetime(2024, 1, 15, tzinfo=UTC)
+    monkeypatch.setattr(
+        "scripts.pipeline.datetime", SimpleNamespace(now=lambda tz=None: fixed_today)
+    )
     monkeypatch.chdir(tmp_path)
 
     monkeypatch.setattr(
@@ -322,8 +329,10 @@ def test_run_pipeline_upload_failure_does_not_stop_pipeline(
     sample_mart_df,
     mock_train_metrics,
 ):
-    fixed_today = datetime(2024, 1, 15)
-    monkeypatch.setattr("scripts.pipeline.datetime", SimpleNamespace(utcnow=lambda: fixed_today))
+    fixed_today = datetime(2024, 1, 15, tzinfo=UTC)
+    monkeypatch.setattr(
+        "scripts.pipeline.datetime", SimpleNamespace(now=lambda tz=None: fixed_today)
+    )
     monkeypatch.chdir(tmp_path)
 
     monkeypatch.setattr(

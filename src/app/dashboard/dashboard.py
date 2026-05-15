@@ -795,7 +795,7 @@ with tab_overview:
         with f2:
             period = st.selectbox(
                 "Période",
-                ["Depuis le début du mois", "7 derniers jours", "Toutes les données"],
+                ["Toutes les données", "Depuis le début du mois", "7 derniers jours"],
                 index=0,  # Par défaut sur le mois en cours
             )
 
