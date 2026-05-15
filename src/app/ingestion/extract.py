@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 
 import pandas as pd
 import requests
@@ -11,34 +11,55 @@ def extract_from_signalconso_api(
     limit: int = 100_000,
     date_from: date | None = None,
 ) -> pd.DataFrame:
+    """
+    Stratégie : on pagine par tranches de dates (1 mois) au lieu d'utiliser offset.
+    """
     page_size = 100
-    offset = 0
-    rows = []
+    rows: list[dict] = []
 
-    while len(rows) < limit:
-        params = {
-            "limit": page_size,
-            "offset": offset,
-            "order_by": "creationdate",
-        }
-        response = requests.get(api_url, params=params, timeout=60)
-        response.raise_for_status()
-        records = response.json().get("results", [])
-        if not records:
-            break
-        rows.extend(records)
-        offset += page_size
+    # Plage de dates : 2 ans par défaut
+    end_dt = datetime.now(UTC)
+    start_dt = (
+        datetime(date_from.year, date_from.month, date_from.day, tzinfo=UTC)
+        if date_from
+        else end_dt - timedelta(days=730)
+    )
 
-    df = pd.json_normalize(rows[:limit])
+    # Découper en tranches mensuelles
+    cursor = start_dt
+    while cursor < end_dt and len(rows) < limit:
+        next_cursor = min(cursor + timedelta(days=30), end_dt)
 
-    # Filtre de date en local sur pandas (plus fiable que l'API)
-    if date_from and not df.empty:
-        date_col = next(
-            (c for c in df.columns if "date" in c.lower() and "creation" in c.lower()),
-            None,
-        )
-        if date_col:
-            df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-            df = df[df[date_col].dt.date >= date_from].reset_index(drop=True)
+        date_start_str = cursor.strftime("%Y-%m-%dT%H:%M:%SZ")
+        date_end_str = next_cursor.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    return df
+        offset = 0
+        while len(rows) < limit:
+            params = {
+                "limit": page_size,
+                "offset": offset,
+                "where": (
+                    f"creationdate >= '{date_start_str}' AND creationdate < '{date_end_str}'"
+                ),
+            }
+            response = requests.get(api_url, params=params, timeout=60)
+            response.raise_for_status()
+
+            payload = response.json()
+            records = payload.get("results", [])
+            if not records:
+                break
+
+            rows.extend(records)
+            offset += page_size
+
+            # Sécurité : offset max ODS = 9 900
+            if offset >= 9_900:
+                break
+
+        cursor = next_cursor
+
+    if not isinstance(rows, list):
+        raise ValueError("Format inattendu retourné par l'API SignalConso")
+
+    return pd.json_normalize(rows[:limit])

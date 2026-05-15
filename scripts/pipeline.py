@@ -141,7 +141,7 @@ def run_pipeline(log) -> dict:
     Pipeline complet SignalConso — appelé depuis Streamlit ou CLI.
 
     Flux :
-      ① Extract API (10 000 enregistrements)
+      ① Extract API (100 000 enregistrements)
       ② Upload GCS raw/  →  table externe BigQuery lit automatiquement
       ③ dbt run  →  staging → intermediate → mart_signalconso
       ④ Lecture mart BigQuery
