@@ -4,7 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -141,7 +141,7 @@ def run_pipeline(log) -> dict:
     Pipeline complet SignalConso — appelé depuis Streamlit ou CLI.
 
     Flux :
-      ① Extract API (100 000 enregistrements)
+      ① Extract API (10 000 enregistrements)
       ② Upload GCS raw/  →  table externe BigQuery lit automatiquement
       ③ dbt run  →  staging → intermediate → mart_signalconso
       ④ Lecture mart BigQuery
@@ -154,7 +154,7 @@ def run_pipeline(log) -> dict:
                n_classes, leaderboard, date
     """
     settings = get_settings()
-    today = datetime.utcnow().strftime("%Y-%m-%d")
+    today = datetime.now(UTC).strftime("%Y-%m-%d")
     models_dir = Path("models")
     models_dir.mkdir(parents=True, exist_ok=True)
 
@@ -164,8 +164,8 @@ def run_pipeline(log) -> dict:
     log("📥 Extraction API SignalConso...")
     raw_df = extract_from_signalconso_api(
         API_URL,
-        limit=100_000,
-        date_from=date.today() - timedelta(days=730),
+        limit=10_000,
+        date_to=date.today(),
     )
     log(f"  ✔ {len(raw_df):,} enregistrements extraits")
 
