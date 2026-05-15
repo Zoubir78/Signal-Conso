@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -197,7 +197,10 @@ def test_run_pipeline_success(
     mock_train_metrics,
 ):
     fixed_today = datetime(2024, 1, 15)
-    monkeypatch.setattr("scripts.pipeline.datetime", SimpleNamespace(utcnow=lambda: fixed_today))
+    fixed_today = datetime(2024, 1, 15, tzinfo=UTC)
+    monkeypatch.setattr(
+        "scripts.pipeline.datetime", SimpleNamespace(now=lambda tz=None: fixed_today)
+    )
     monkeypatch.chdir(tmp_path)
 
     mock_extract = MagicMock(return_value=sample_raw_df)
