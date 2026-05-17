@@ -164,7 +164,7 @@ def run_pipeline(log) -> dict:
     log("📥 Extraction API SignalConso...")
     raw_df = extract_from_signalconso_api(
         API_URL,
-        limit=10_000,
+        limit=50_000,
         date_to=date.today(),
     )
     log(f"  ✔ {len(raw_df):,} enregistrements extraits")

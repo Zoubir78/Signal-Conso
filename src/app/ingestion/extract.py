@@ -8,7 +8,7 @@ import requests
 
 def extract_from_signalconso_api(
     api_url: str,
-    limit: int = 10_000,
+    limit: int = 50_000,
     date_from: date | None = None,
     date_to: date | None = None,
 ) -> pd.DataFrame:

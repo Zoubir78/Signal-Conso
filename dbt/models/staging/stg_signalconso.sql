@@ -14,31 +14,35 @@ deduped AS (
 
 renamed AS (
     SELECT
-        id                          AS source_id,
-        creationdate                AS created_at,
-        category,
+        id                              AS source_id,
+        creationdate                    AS created_at,
+
+        category[SAFE_OFFSET(0)]        AS category,
         subcategories,
         tags,
         status,
+
         contactagreement,
         forwardtoreponseconso,
         signalement_transmis,
         signalement_lu,
         signalement_reponse,
+
         dep_name,
         dep_code,
-        CAST(reg_code AS STRING)    AS reg_code,
+        CAST(reg_code AS STRING)        AS reg_code,
         reg_name,
+
         clean_text,
         token_count,
         is_valid,
+
         ROW_NUMBER() OVER (
             ORDER BY creationdate DESC
-        )                           AS _row_rank
+        )                               AS _row_rank
+
     FROM deduped
 )
 
-SELECT * EXCEPT (_row_rank)        -- ← SELECT final obligatoire
+SELECT * EXCEPT (_row_rank)
 FROM renamed
-WHERE is_valid = TRUE
-  AND _row_rank <= 10000
