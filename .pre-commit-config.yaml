@@ -9,6 +9,10 @@ repos:
     rev: 4.1.0
     hooks:
       - id: sqlfluff-lint
+        additional_dependencies:
+          - dbt-bigquery
+        files: "^dbt/models/(?!staging).*\\.sql$"
+        args: [--ignore=templating, --dialect=bigquery]
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0

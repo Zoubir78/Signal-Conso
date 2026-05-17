@@ -49,6 +49,3 @@ renamed AS (
 
     FROM deduped
 )
-
-SELECT * FROM renamed
-WHERE is_valid = TRUE
