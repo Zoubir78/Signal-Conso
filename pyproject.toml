@@ -54,6 +54,14 @@ packages = [{include = "app", from = "src"}]
 line-length = 100
 target-version = "py311"
 
+[tool.sqlfluff.core]
+dialect = "bigquery"
+templater = "jinja"
+ignore = "templating"
+
+[tool.sqlfluff.rules.capitalisation.keywords]
+capitalisation_policy = "upper"
+
 exclude = [
     ".git",
     "__pycache__",

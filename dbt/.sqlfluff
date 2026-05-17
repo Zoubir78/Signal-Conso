@@ -1,0 +1,8 @@
+# dbt/.sqlfluff
+[sqlfluff]
+dialect = bigquery
+templater = jinja
+
+[sqlfluff:templater:jinja:macros]
+source = {% macro source(schema, table) %}{{ schema }}_{{ table }}{% endmacro %}
+ref = {% macro ref(model) %}{{ model }}{% endmacro %}
