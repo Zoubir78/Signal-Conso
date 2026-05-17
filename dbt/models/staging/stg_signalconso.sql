@@ -17,7 +17,7 @@ renamed AS (
         id                              AS source_id,
         creationdate                    AS created_at,
 
-        category[SAFE_OFFSET(0)]        AS category,
+        JSON_VALUE(category, '$[0]')        AS category,
         subcategories,
         tags,
         status,
