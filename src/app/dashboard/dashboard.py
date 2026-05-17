@@ -783,20 +783,25 @@ with tab_overview:
             ref_date = date.today()
             st.warning("Aucune colonne de date trouvée dans le dataset.")
 
+        data_max = working_df["record_date"].dropna().max().date()
+        days_lag = (date.today() - data_max).days
+
+        if days_lag > 30:
+            st.warning(
+                f"⚠️ Les données disponibles s'arrêtent au **{data_max.strftime('%d/%m/%Y')}** "
+                f"({days_lag} jours de délai). L'open data SignalConso est mis à jour avec retard."
+            )
+
         # ── Filtres ──────────────────────────────────────────────────
         f1, f2, f3, f4 = st.columns([1.2, 1.2, 1.5, 1.5])
 
         with f1:
-            sel_date = st.date_input(
-                "Date de référence",
-                value=ref_date,  # ← 09/04/2026 au lieu de 17/05/2026
-                format="DD/MM/YYYY",
-            )
+            sel_date = st.date_input("Date de référence", value=date.today(), format="DD/MM/YYYY")
 
         with f2:
             period = st.selectbox(
                 "Période",
-                ["Toutes les données", "Depuis le début du mois", "7 derniers jours"],
+                ["Toutes les données", "30 derniers jours", "7 derniers jours"],
                 index=0,
             )
 
@@ -815,6 +820,9 @@ with tab_overview:
 
             if period == "Depuis le début du mois":
                 start = ref.replace(day=1)
+                end = ref
+            elif period == "30 derniers jours":
+                start = ref - pd.Timedelta(days=29)
                 end = ref
             elif period == "7 derniers jours":
                 start = ref - pd.Timedelta(days=6)
