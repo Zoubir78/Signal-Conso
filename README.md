@@ -37,7 +37,7 @@ Ce projet a pour objectifs de :
 | Versioning & CI/CD | GitHub, GitHub Actions |
 | Qualité de code | Ruff, SQLFluff, pre-commit |
 | Conteneurisation | Docker, Docker Compose |
-| Infrastructure | GCS |
+| Infrastructure | GCP VM e2-micro, GCS |
 | Stockage & transformation | BigQuery, dbt-bigquery |
 | Orchestration | Prefect Cloud |
 | API de prédiction | FastAPI |
