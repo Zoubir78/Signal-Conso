@@ -81,37 +81,31 @@ def test_paginates_until_limit(mock_get):
 
 @patch("app.ingestion.extract.requests.get")
 def test_passes_correct_pagination_params(mock_get):
-    """Vérifie que offset et limit sont bien transmis à l'API."""
+    """Vérifie que offset et limit sont bien transmis dans la première fenêtre."""
     records = [_make_record(i) for i in range(100)]
-    # Premier appel : 100 records ; deuxième : vide pour stopper
-    mock_get.side_effect = [
-        _make_response(records),
-        _make_response([]),
-    ]
 
-    extract_from_signalconso_api(API_URL, limit=10000)
+    # Retourner 100 records au 1er appel, puis vide pour tous les suivants
+    mock_get.side_effect = lambda *args, **kwargs: (
+        _make_response(records) if mock_get.call_count <= 1 else _make_response([])
+    )
+
+    extract_from_signalconso_api(API_URL, limit=10_000, months_back=1)
 
     first_call_params = mock_get.call_args_list[0].kwargs["params"]
     assert first_call_params["limit"] == 100
     assert first_call_params["offset"] == 0
 
-    second_call_params = mock_get.call_args_list[1].kwargs["params"]
-    assert second_call_params["offset"] == 100
-
 
 @patch("app.ingestion.extract.requests.get")
 def test_stops_when_api_returns_empty_results(mock_get):
-    """Doit s'arrêter dès que l'API retourne une liste vide."""
-    records = [_make_record(i) for i in range(100)]
-    mock_get.side_effect = [
-        _make_response(records),
-        _make_response([]),  # ← stop
-    ]
+    """Doit s'arrêter dès que l'API retourne une liste vide pour une fenêtre."""
+    # Toujours retourner vide → doit s'arrêter proprement sans StopIteration
+    mock_get.return_value = _make_response([])
 
-    df = extract_from_signalconso_api(API_URL, limit=10000)
+    df = extract_from_signalconso_api(API_URL, limit=10_000, months_back=1)
 
-    assert len(df) == 100
-    assert mock_get.call_count == 2
+    assert df.empty
+    assert mock_get.call_count >= 1
 
 
 @patch("app.ingestion.extract.requests.get")

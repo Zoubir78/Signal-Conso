@@ -128,6 +128,7 @@ dmypy.json
 dbt/target/
 dbt/dbt_packages/
 dbt/logs/
+dbt/.env
 
 # VSCode project settings
 .vscode/

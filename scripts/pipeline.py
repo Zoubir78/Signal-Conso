@@ -4,7 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -164,8 +164,8 @@ def run_pipeline(log) -> dict:
     log("📥 Extraction API SignalConso...")
     raw_df = extract_from_signalconso_api(
         API_URL,
-        limit=10_000,
-        date_to=date.today(),
+        limit=50_000,
+        months_back=12,  # 12 mois glissants
     )
     log(f"  ✔ {len(raw_df):,} enregistrements extraits")
 
