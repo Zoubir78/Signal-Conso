@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 import requests
@@ -9,48 +9,48 @@ import requests
 def extract_from_signalconso_api(
     api_url: str,
     limit: int = 50_000,
-    date_from: date | None = None,
-    date_to: date | None = None,
+    months_back: int = 12,  # ← fenêtre glissante par défaut
 ) -> pd.DataFrame:
+    """
+    Pagination par tranches de dates pour contourner la limite offset=10 000
+    de l'API OpenDataSoft.
+    """
     page_size = 100
-    offset = 0
-    rows = []
+    max_offset = 9_900  # ← limite dure ODS
+    rows: list[dict] = []
 
-    while len(rows) < limit:
-        params = {
-            "limit": page_size,
-            "offset": offset,
-            "order_by": "-creationdate",
-        }
-        response = requests.get(api_url, params=params, timeout=60)
-        response.raise_for_status()
-        records = response.json().get("results", [])
-        if not records:
-            break
-        rows.extend(records)
-        offset += page_size
+    end_dt = date.today()
+    start_dt = end_dt - timedelta(days=30 * months_back)
 
-    df = pd.json_normalize(rows)
+    # Découper en tranches de 7 jours
+    cursor = start_dt
+    while cursor < end_dt and len(rows) < limit:
+        next_cursor = min(cursor + timedelta(days=7), end_dt)
 
-    if df.empty:
-        return df
+        offset = 0
+        while len(rows) < limit and offset <= max_offset:
+            params = {
+                "limit": page_size,
+                "offset": offset,
+                "order_by": "-creationdate",
+                "where": (
+                    f"creationdate >= '{cursor.isoformat()}'"
+                    f" AND creationdate < '{next_cursor.isoformat()}'"
+                ),
+            }
+            response = requests.get(api_url, params=params, timeout=60)
+            response.raise_for_status()
 
-    date_col = next(
-        (c for c in df.columns if "date" in c.lower() and "creation" in c.lower()),
-        None,
-    )
+            records = response.json().get("results", [])
+            if not records:
+                break
 
-    if date_col:
-        df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+            rows.extend(records)
+            offset += page_size
 
-        if date_from:
-            df = df[df[date_col].dt.date >= date_from]
+        cursor = next_cursor
 
-        if date_to:
-            df = df[df[date_col].dt.date <= date_to]
+    if not rows:
+        return pd.DataFrame()
 
-        df = df.sort_values(date_col, ascending=False).head(limit).reset_index(drop=True)
-    else:
-        df = df.head(limit).reset_index(drop=True)
-
-    return df
+    return pd.json_normalize(rows[:limit])
