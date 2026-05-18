@@ -462,23 +462,23 @@ def _keyword_freq(df: pd.DataFrame, limit: int = 20) -> pd.Series:
 # ─────────────────────────────────────────────
 
 
-@st.cache_data(ttl=60)  # S'exécute au chargement, puis max une fois toutes les 60 secondes
+@st.cache_data(ttl=60)
 def auto_sync_prefect_runs():
     """Déclenche la synchronisation des derniers runs Prefect vers GCS."""
     try:
-        # Option A : Si le fichier est à la racine ou dans le PYTHONPATH
         from scripts.init_prefect_results_gcs import sync_prefect_runs_to_gcs
+    except ImportError:
+        st.sidebar.warning(
+            "⚠️ Impossible d'importer sync_prefect_runs_to_gcs. Vérifiez que 'scripts/init_prefect_results_gcs.py' est accessible."
+        )
+        return
 
-        # Option B (si vous utilisez la structure app/scripts/...) :
-        # from app.scripts.init_prefect_results_gcs import sync_prefect_runs_to_gcs
-
+    try:
         sync_prefect_runs_to_gcs(limit=10)
     except Exception as e:
-        # Utilisation de st.sidebar.warning pour ne pas bloquer l'affichage principal en cas de bug API
         st.sidebar.warning(f"⚠️ Erreur de synchro Prefect Cloud : {e}")
 
 
-# APPEL AUTOMATIQUE : Placé ici, il s'exécute dès le chargement de la page
 auto_sync_prefect_runs()
 
 
@@ -872,22 +872,25 @@ with tab_overview:
         data_max = working_df["record_date"].dropna().max().date()
         days_lag = (date.today() - data_max).days
 
-        if days_lag > 30:
-            st.warning(
-                f"⚠️ Les données disponibles s'arrêtent au **{data_max.strftime('%d/%m/%Y')}** "
-                f"({days_lag} jours de délai). L'open data SignalConso est mis à jour avec retard."
-            )
-
         # ── Filtres ──────────────────────────────────────────────────
         f1, f2, f3, f4 = st.columns([1.2, 1.2, 1.5, 1.5])
 
         with f1:
-            sel_date = st.date_input("Date de référence", value=date.today(), format="DD/MM/YYYY")
+            sel_date = st.date_input(
+                "Date de référence",
+                value=data_max.date(),  # ← date la plus récente des données
+                format="DD/MM/YYYY",
+            )
 
         with f2:
             period = st.selectbox(
                 "Période",
-                ["Toutes les données", "30 derniers jours", "7 derniers jours"],
+                [
+                    "Toutes les données",
+                    "Depuis le début du mois",
+                    "30 derniers jours",
+                    "7 derniers jours",
+                ],
                 index=0,
             )
 
@@ -902,6 +905,7 @@ with tab_overview:
 
         if "record_date" in filtered_df.columns:
             filtered_df = filtered_df[filtered_df["record_date"].notna()].copy()
+            # Utiliser la date choisie par l'utilisateur (sel_date) comme fin de période
             ref = pd.Timestamp(sel_date)
 
             if period == "Depuis le début du mois":
@@ -912,19 +916,22 @@ with tab_overview:
                 end = ref
             elif period == "7 derniers jours":
                 start = ref - pd.Timedelta(days=6)
-                end = ref
             else:  # Toutes les données
                 start = filtered_df["record_date"].min()
-                end = filtered_df["record_date"].max()  # ← date max réelle des données
+                end = filtered_df["record_date"].max()
 
             filtered_df = filtered_df[
                 (filtered_df["record_date"] >= start.normalize())
                 & (filtered_df["record_date"] <= end.normalize())
             ]
 
-            st.caption(
-                f"Filtre actif : {start.date()} → {end.date()} · {len(filtered_df):,} ligne(s)"
-            )
+            if filtered_df.empty:
+                st.info(
+                    f"Aucune donnée entre le {start.date()} et le {end.date()}. "
+                    "Essayez une période plus large ou une date de référence plus ancienne."
+                )
+            else:
+                st.caption(f"{len(filtered_df):,} ligne(s) du {start.date()} au {end.date()}")
 
         if sel_region != "Toutes les régions" and "reg_name" in filtered_df.columns:
             filtered_df = filtered_df[filtered_df["reg_name"].astype(str) == sel_region]
