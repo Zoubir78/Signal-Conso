@@ -858,19 +858,22 @@ with tab_overview:
         date_col = next((c for c in DATE_COL_CANDIDATES if c in df.columns), None)
 
         working_df = df.copy()
+        days_lag = 0
+
         if date_col:
             working_df[date_col] = pd.to_datetime(working_df[date_col], errors="coerce")
             working_df["record_date"] = working_df[date_col].dt.normalize()
 
-            # Référence = dernière date connue dans les données (pas aujourd'hui)
-            data_max = working_df["record_date"].dropna().max()
-            ref_date = data_max.date() if pd.notna(data_max) else date.today()
+            # Extraction sécurisée de la date maximale réelle du dataset
+            valid_dates = working_df["record_date"].dropna()
+            if not valid_dates.empty:
+                data_max_date = valid_dates.max().date()
+                days_lag = (date.today() - data_max_date).days
+            else:
+                data_max_date = date.today()
         else:
-            ref_date = date.today()
+            data_max_date = date.today()
             st.warning("Aucune colonne de date trouvée dans le dataset.")
-
-        data_max = working_df["record_date"].dropna().max().date()
-        days_lag = (date.today() - data_max).days
 
         # ── Filtres ──────────────────────────────────────────────────
         f1, f2, f3, f4 = st.columns([1.2, 1.2, 1.5, 1.5])
@@ -878,7 +881,7 @@ with tab_overview:
         with f1:
             sel_date = st.date_input(
                 "Date de référence",
-                value=data_max.date(),  # ← date la plus récente des données
+                value=data_max_date,  # ← date la plus récente des données, sécurisée
                 format="DD/MM/YYYY",
             )
 
@@ -905,7 +908,6 @@ with tab_overview:
 
         if "record_date" in filtered_df.columns:
             filtered_df = filtered_df[filtered_df["record_date"].notna()].copy()
-            # Utiliser la date choisie par l'utilisateur (sel_date) comme fin de période
             ref = pd.Timestamp(sel_date)
 
             if period == "Depuis le début du mois":
@@ -917,8 +919,8 @@ with tab_overview:
             elif period == "7 derniers jours":
                 start = ref - pd.Timedelta(days=6)
             else:  # Toutes les données
-                start = filtered_df["record_date"].min()
-                end = filtered_df["record_date"].max()
+                start = filtered_df["record_date"].min() if not filtered_df.empty else ref
+                end = filtered_df["record_date"].max() if not filtered_df.empty else ref
 
             filtered_df = filtered_df[
                 (filtered_df["record_date"] >= start.normalize())
@@ -956,7 +958,6 @@ with tab_overview:
             # ── KPIs ──────────────────────────────────────────────────
             total = len(filtered_df)
 
-            # Utilisation de .get() ou vérification pour éviter les erreurs de colonnes manquantes
             def get_sum(col):
                 return (
                     int(_bool_series(filtered_df[col]).sum()) if col in filtered_df.columns else 0
@@ -994,7 +995,7 @@ with tab_overview:
                 '<div class="sec-header">📈 Évolution des signalements</div>',
                 unsafe_allow_html=True,
             )
-            if "record_date" in filtered_df.columns:
+            if "record_date" in filtered_df.columns and not filtered_df.empty:
                 timeline = (
                     filtered_df.groupby(filtered_df["record_date"].dt.date)
                     .size()
@@ -1002,7 +1003,6 @@ with tab_overview:
                     .rename(columns={"record_date": "date"})
                 )
 
-                # Utilisation de x="date" car on vient de renommer la colonne
                 fig = px.area(
                     timeline,
                     x="date",
@@ -1162,7 +1162,6 @@ with tab_flows:
         st.markdown('<div class="sec-header">📋 Historique des runs</div>', unsafe_allow_html=True)
 
         if not runs_df.empty:
-            # Colonnes à afficher selon la source
             if api_available:
                 display_cols = {
                     "start_time": "Démarré le",
@@ -1182,17 +1181,24 @@ with tab_flows:
             table_df = runs_df[[c for c in display_cols if c in runs_df.columns]].copy()
             table_df = table_df.rename(columns=display_cols)
 
-            # Format date
-            for col in ["Démarré le"]:
-                if col in table_df.columns:
-                    table_df[col] = table_df[col].apply(_fmt_dt)
+            if "Démarré le" in table_df.columns:
+                table_df["Démarré le"] = table_df["Démarré le"].apply(_fmt_dt)
 
             st.dataframe(table_df, width="stretch", height=300)
 
         # ── Timeline des runs ──────────────────────────────────────────────
         st.markdown('<div class="sec-header">📈 Timeline des runs</div>', unsafe_allow_html=True)
         time_col = "start_time" if "start_time" in runs_df.columns else None
+
         if time_col and not runs_df[time_col].isna().all():
+            color_col = "status" if "status" in runs_df.columns else "state"
+
+            # Normalisation en minuscules pour correspondre aux clés du color_map
+            if color_col in runs_df.columns:
+                runs_df["color_group"] = runs_df[color_col].astype(str).str.lower()
+            else:
+                runs_df["color_group"] = "scheduled"
+
             color_map = {
                 "success": "#3fb950",
                 "completed": "#3fb950",
@@ -1201,21 +1207,21 @@ with tab_flows:
                 "running": "#1f6feb",
                 "scheduled": "#8b949e",
             }
+
+            # Construction dynamique du hover_data pour éviter les colonnes manquantes
+            hover_cols = {}
+            for col in ["flow_run_name", "duration_s", time_col]:
+                if col in runs_df.columns:
+                    hover_cols[col] = True
+
             fig_timeline = px.scatter(
                 runs_df,
                 x=time_col,
                 y="deployment_name",
-                color="status" if "status" in runs_df.columns else "state",
+                color="color_group",
                 color_discrete_map=color_map,
-                hover_data={
-                    "flow_run_name": True,
-                    "duration_s": True,
-                    time_col: True,
-                }
-                if "flow_run_name" in runs_df.columns
-                else {},
+                hover_data=hover_cols,
                 template="plotly_dark",
-                title="",
             )
             fig_timeline.update_traces(marker=dict(size=12))
             fig_timeline.update_layout(
@@ -1236,7 +1242,7 @@ with tab_flows:
             '<div class="sec-header">📌 KPIs du dernier run réussi</div>',
             unsafe_allow_html=True,
         )
-        # Charger depuis GCS (source de vérité des KPIs calculés)
+
         latest_gcs = _load_latest_prefect_summary()
         if latest_gcs:
             kpis = latest_gcs.get("kpis", [])
@@ -1252,7 +1258,7 @@ with tab_flows:
                         continue
                 if isinstance(val, str):
                     try:
-                        num = float(val.replace("%", ""))
+                        num = float(val.replace("%", "").strip())
                         val = num / 100 if num > 1 else num
                     except Exception:
                         continue
