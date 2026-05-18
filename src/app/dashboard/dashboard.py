@@ -460,6 +460,28 @@ def _keyword_freq(df: pd.DataFrame, limit: int = 20) -> pd.Series:
 # ─────────────────────────────────────────────
 # GCS HELPERS
 # ─────────────────────────────────────────────
+
+
+@st.cache_data(ttl=60)
+def auto_sync_prefect_runs():
+    """Déclenche la synchronisation des derniers runs Prefect vers GCS."""
+    try:
+        from scripts.init_prefect_results_gcs import sync_prefect_runs_to_gcs
+    except ImportError:
+        st.sidebar.warning(
+            "⚠️ Impossible d'importer sync_prefect_runs_to_gcs. Vérifiez que 'scripts/init_prefect_results_gcs.py' est accessible."
+        )
+        return
+
+    try:
+        sync_prefect_runs_to_gcs(limit=10)
+    except Exception as e:
+        st.sidebar.warning(f"⚠️ Erreur de synchro Prefect Cloud : {e}")
+
+
+auto_sync_prefect_runs()
+
+
 @st.cache_resource
 def _gcs() -> storage.Client:
     return storage.Client()
@@ -624,6 +646,70 @@ def predict_api(text: str, model_blob: str | None = None) -> dict:
     return r.json()
 
 
+@st.cache_data(ttl=30)  # Rafraîchit automatiquement toutes les 30 secondes
+def _fetch_prefect_cloud_runs(limit: int = 20) -> list[dict[str, Any]]:
+    """
+    Interroge le endpoint FastAPI /flows/runs qui lui-même appelle Prefect Cloud API.
+    Retourne la liste des derniers runs auto-schedulés et manuels.
+    Appelé à chaque chargement de l'application (TTL=30s).
+    """
+    try:
+        r = requests.get(
+            f"{FLOWS_API_URL}/runs",
+            params={"limit": limit},
+            timeout=10,
+        )
+        r.raise_for_status()
+        return r.json()
+    except Exception:
+        return []
+
+
+def _cloud_runs_to_dataframe(runs: list[dict[str, Any]]) -> pd.DataFrame:
+    """Convertit la liste des runs Prefect Cloud en DataFrame normalisé."""
+    if not runs:
+        return pd.DataFrame()
+
+    rows = []
+    for run in runs:
+        state_type = str(run.get("state_type", "")).upper()
+        status = (
+            "success"
+            if state_type == "COMPLETED"
+            else "failed"
+            if state_type == "FAILED"
+            else "crashed"
+            if state_type == "CRASHED"
+            else "running"
+            if state_type == "RUNNING"
+            else "scheduled"
+            if state_type == "SCHEDULED"
+            else state_type.lower()
+        )
+        rows.append(
+            {
+                "flow_run_id": run.get("flow_run_id", ""),
+                "flow_run_name": run.get("flow_run_name", "—"),
+                "deployment_name": run.get("deployment_name", "—"),
+                "state": run.get("state", "—"),
+                "state_type": state_type,
+                "status": status,
+                "start_time": pd.to_datetime(run.get("start_time"), utc=True, errors="coerce"),
+                "end_time": pd.to_datetime(run.get("end_time"), utc=True, errors="coerce"),
+                "created": pd.to_datetime(run.get("created"), utc=True, errors="coerce"),
+                "duration_s": run.get("duration_seconds"),
+                "scheduled": run.get("scheduled", False),
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    if "start_time" in df.columns:
+        df = df.sort_values("start_time", ascending=False, na_position="last").reset_index(
+            drop=True
+        )
+    return df
+
+
 @st.cache_resource
 def _gcs() -> storage.Client:
     return storage.Client()
@@ -772,36 +858,42 @@ with tab_overview:
         date_col = next((c for c in DATE_COL_CANDIDATES if c in df.columns), None)
 
         working_df = df.copy()
+        days_lag = 0
+
         if date_col:
             working_df[date_col] = pd.to_datetime(working_df[date_col], errors="coerce")
             working_df["record_date"] = working_df[date_col].dt.normalize()
 
-            # Référence = dernière date connue dans les données (pas aujourd'hui)
-            data_max = working_df["record_date"].dropna().max()
-            ref_date = data_max.date() if pd.notna(data_max) else date.today()
+            # Extraction sécurisée de la date maximale réelle du dataset
+            valid_dates = working_df["record_date"].dropna()
+            if not valid_dates.empty:
+                data_max_date = valid_dates.max().date()
+                days_lag = (date.today() - data_max_date).days
+            else:
+                data_max_date = date.today()
         else:
-            ref_date = date.today()
+            data_max_date = date.today()
             st.warning("Aucune colonne de date trouvée dans le dataset.")
-
-        data_max = working_df["record_date"].dropna().max().date()
-        days_lag = (date.today() - data_max).days
-
-        if days_lag > 30:
-            st.warning(
-                f"⚠️ Les données disponibles s'arrêtent au **{data_max.strftime('%d/%m/%Y')}** "
-                f"({days_lag} jours de délai). L'open data SignalConso est mis à jour avec retard."
-            )
 
         # ── Filtres ──────────────────────────────────────────────────
         f1, f2, f3, f4 = st.columns([1.2, 1.2, 1.5, 1.5])
 
         with f1:
-            sel_date = st.date_input("Date de référence", value=date.today(), format="DD/MM/YYYY")
+            sel_date = st.date_input(
+                "Date de référence",
+                value=data_max_date,  # ← date la plus récente des données, sécurisée
+                format="DD/MM/YYYY",
+            )
 
         with f2:
             period = st.selectbox(
                 "Période",
-                ["Toutes les données", "30 derniers jours", "7 derniers jours"],
+                [
+                    "Toutes les données",
+                    "Depuis le début du mois",
+                    "30 derniers jours",
+                    "7 derniers jours",
+                ],
                 index=0,
             )
 
@@ -826,19 +918,22 @@ with tab_overview:
                 end = ref
             elif period == "7 derniers jours":
                 start = ref - pd.Timedelta(days=6)
-                end = ref
             else:  # Toutes les données
-                start = filtered_df["record_date"].min()
-                end = filtered_df["record_date"].max()  # ← date max réelle des données
+                start = filtered_df["record_date"].min() if not filtered_df.empty else ref
+                end = filtered_df["record_date"].max() if not filtered_df.empty else ref
 
             filtered_df = filtered_df[
                 (filtered_df["record_date"] >= start.normalize())
                 & (filtered_df["record_date"] <= end.normalize())
             ]
 
-            st.caption(
-                f"Filtre actif : {start.date()} → {end.date()} · {len(filtered_df):,} ligne(s)"
-            )
+            if filtered_df.empty:
+                st.info(
+                    f"Aucune donnée entre le {start.date()} et le {end.date()}. "
+                    "Essayez une période plus large ou une date de référence plus ancienne."
+                )
+            else:
+                st.caption(f"{len(filtered_df):,} ligne(s) du {start.date()} au {end.date()}")
 
         if sel_region != "Toutes les régions" and "reg_name" in filtered_df.columns:
             filtered_df = filtered_df[filtered_df["reg_name"].astype(str) == sel_region]
@@ -863,7 +958,6 @@ with tab_overview:
             # ── KPIs ──────────────────────────────────────────────────
             total = len(filtered_df)
 
-            # Utilisation de .get() ou vérification pour éviter les erreurs de colonnes manquantes
             def get_sum(col):
                 return (
                     int(_bool_series(filtered_df[col]).sum()) if col in filtered_df.columns else 0
@@ -901,7 +995,7 @@ with tab_overview:
                 '<div class="sec-header">📈 Évolution des signalements</div>',
                 unsafe_allow_html=True,
             )
-            if "record_date" in filtered_df.columns:
+            if "record_date" in filtered_df.columns and not filtered_df.empty:
                 timeline = (
                     filtered_df.groupby(filtered_df["record_date"].dt.date)
                     .size()
@@ -909,7 +1003,6 @@ with tab_overview:
                     .rename(columns={"record_date": "date"})
                 )
 
-                # Utilisation de x="date" car on vient de renommer la colonne
                 fig = px.area(
                     timeline,
                     x="date",
@@ -987,140 +1080,231 @@ with tab_overview:
 # ══════════════════════════════════════════════
 with tab_flows:
     st.markdown(
-        '<div class="sec-header">⏱️ Flows Prefect en temps réel</div>', unsafe_allow_html=True
+        '<div class="sec-header">⏱️ Flows Prefect en temps réel</div>',
+        unsafe_allow_html=True,
     )
     st.caption(
-        "Affichage automatique du dernier run détecté dans GCS à chaque chargement de l’application."
+        "Récupération automatique depuis Prefect Cloud API à chaque chargement · "
+        "Rafraîchissement toutes les 30 secondes."
     )
 
-    flow_runs = _prefect_runs_dataframe(limit=20)
-    latest_flow = flow_runs.iloc[0].to_dict() if not flow_runs.empty else None
+    # ── Auto-refresh bouton ────────────────────────────────────────────────
+    col_refresh, col_info = st.columns([1, 5])
+    with col_refresh:
+        if st.button("🔄 Rafraîchir", key="refresh_flows"):
+            st.cache_data.clear()
+            st.rerun()
+    with col_info:
+        st.caption(f"API : `{FLOWS_API_URL}/runs`")
 
-    if latest_flow is None:
-        st.info(f"Aucun résultat Prefect trouvé dans `{GCS_RESULTS_PREFIX}`.")
+    st.divider()
+
+    # ── Chargement depuis Prefect Cloud API ───────────────────────────────
+    with st.spinner("Chargement des runs Prefect Cloud..."):
+        cloud_runs_raw = _fetch_prefect_cloud_runs(limit=30)
+        cloud_df = _cloud_runs_to_dataframe(cloud_runs_raw)
+
+    # ── Fallback GCS si l'API est indisponible ────────────────────────────
+    gcs_runs = _prefect_runs_dataframe(limit=20)
+    api_available = len(cloud_df) > 0
+
+    if not api_available and gcs_runs.empty:
+        st.info(
+            "Aucun run trouvé. "
+            "Vérifiez que l'API FastAPI est démarrée et que des flows ont été exécutés."
+        )
     else:
-        latest_summary = (
-            latest_flow.get("summary", {}) if isinstance(latest_flow.get("summary"), dict) else {}
-        )
-        status_raw = str(latest_flow.get("status", "unknown")).lower()
-        status_icon = (
-            "🟢"
-            if status_raw in ["success", "completed"]
-            else "🔴"
-            if status_raw in ["failed", "crashed"]
-            else "🔵"
-        )
+        # ── Source des données ─────────────────────────────────────────────
+        if api_available:
+            runs_df = cloud_df
+            st.success(
+                f"✅ {len(runs_df)} run(s) récupéré(s) depuis Prefect Cloud API",
+                icon="🟢",
+            )
+        else:
+            runs_df = gcs_runs.rename(columns={"computed_at": "start_time"})
+            st.warning(
+                "⚠️ API FastAPI indisponible — affichage depuis GCS (artefacts Prefect).",
+                icon="🟡",
+            )
 
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric(
-            "Dernier run", _fmt_dt(latest_flow.get("computed_at") or latest_flow.get("updated_at"))
-        )
-        c2.metric("Déploiement", latest_flow.get("deployment_name", "—"))
-        c3.metric("Statut", status_raw.title())
-        c4.metric("Source", Path(str(latest_flow.get("results_blob", "—"))).name)
+        # ── Métriques du dernier run ───────────────────────────────────────
+        if not runs_df.empty:
+            latest = runs_df.iloc[0]
+            state_type = str(latest.get("state_type", "")).upper()
+            status_icon = (
+                "🟢"
+                if state_type == "COMPLETED"
+                else "🔴"
+                if state_type in ("FAILED", "CRASHED")
+                else "🔵"
+                if state_type == "RUNNING"
+                else "⚪"
+            )
 
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric(
+                "Dernier run",
+                _fmt_dt(latest.get("start_time") or latest.get("created")),
+            )
+            m2.metric("Déploiement", str(latest.get("deployment_name", "—"))[:30])
+            m3.metric("Statut", f"{status_icon} {latest.get('state', '—')}")
+
+            dur = latest.get("duration_s")
+            m4.metric(
+                "Durée",
+                f"{dur:.1f}s" if dur and not pd.isna(dur) else "—",
+            )
+
+        st.divider()
+
+        # ── Tableau des runs ───────────────────────────────────────────────
+        st.markdown('<div class="sec-header">📋 Historique des runs</div>', unsafe_allow_html=True)
+
+        if not runs_df.empty:
+            if api_available:
+                display_cols = {
+                    "start_time": "Démarré le",
+                    "deployment_name": "Déploiement",
+                    "flow_run_name": "Run",
+                    "state": "État",
+                    "duration_s": "Durée (s)",
+                    "scheduled": "Auto",
+                }
+            else:
+                display_cols = {
+                    "start_time": "Démarré le",
+                    "deployment_name": "Déploiement",
+                    "status": "Statut",
+                }
+
+            table_df = runs_df[[c for c in display_cols if c in runs_df.columns]].copy()
+            table_df = table_df.rename(columns=display_cols)
+
+            if "Démarré le" in table_df.columns:
+                table_df["Démarré le"] = table_df["Démarré le"].apply(_fmt_dt)
+
+            st.dataframe(table_df, width="stretch", height=300)
+
+        # ── Timeline des runs ──────────────────────────────────────────────
+        st.markdown('<div class="sec-header">📈 Timeline des runs</div>', unsafe_allow_html=True)
+        time_col = "start_time" if "start_time" in runs_df.columns else None
+
+        if time_col and not runs_df[time_col].isna().all():
+            color_col = "status" if "status" in runs_df.columns else "state"
+
+            # Normalisation en minuscules pour correspondre aux clés du color_map
+            if color_col in runs_df.columns:
+                runs_df["color_group"] = runs_df[color_col].astype(str).str.lower()
+            else:
+                runs_df["color_group"] = "scheduled"
+
+            color_map = {
+                "success": "#3fb950",
+                "completed": "#3fb950",
+                "failed": "#f85149",
+                "crashed": "#f85149",
+                "running": "#1f6feb",
+                "scheduled": "#8b949e",
+            }
+
+            # Construction dynamique du hover_data pour éviter les colonnes manquantes
+            hover_cols = {}
+            for col in ["flow_run_name", "duration_s", time_col]:
+                if col in runs_df.columns:
+                    hover_cols[col] = True
+
+            fig_timeline = px.scatter(
+                runs_df,
+                x=time_col,
+                y="deployment_name",
+                color="color_group",
+                color_discrete_map=color_map,
+                hover_data=hover_cols,
+                template="plotly_dark",
+            )
+            fig_timeline.update_traces(marker=dict(size=12))
+            fig_timeline.update_layout(
+                height=350,
+                margin=dict(l=0, r=0, t=10, b=0),
+                paper_bgcolor="#0d1117",
+                plot_bgcolor="#0d1117",
+                legend_title_text="Statut",
+                xaxis_title="",
+                yaxis_title="",
+            )
+            st.plotly_chart(fig_timeline, width="stretch")
+        else:
+            st.info("Pas encore assez de runs pour afficher la timeline.")
+
+        # ── KPIs du dernier run réussi ─────────────────────────────────────
         st.markdown(
-            f"""
-            <div style="background:#161b22;border:1px solid #21262d;border-radius:12px;padding:16px;margin:16px 0;">
-              <div style="font-size:14px;font-weight:700;color:#e6edf3;">{status_icon} Dernier run détecté</div>
-              <div style="font-size:12px;color:#8b949e;line-height:1.8;margin-top:8px;">
-                <b style="color:#e6edf3;">Déploiement :</b> {latest_flow.get("deployment_name", "—")}<br>
-                <b style="color:#e6edf3;">Statut :</b> {status_raw.title()}<br>
-                <b style="color:#e6edf3;">Fichier source :</b> {latest_flow.get("results_blob", "—")}
+            '<div class="sec-header">📌 KPIs du dernier run réussi</div>',
+            unsafe_allow_html=True,
+        )
+
+        latest_gcs = _load_latest_prefect_summary()
+        if latest_gcs:
+            kpis = latest_gcs.get("kpis", [])
+            kpi_rows = []
+            for item in kpis:
+                if not isinstance(item, dict):
+                    continue
+                val = item.get("value_pct")
+                if val is None:
+                    try:
+                        val = float(item.get("value", 0))
+                    except Exception:
+                        continue
+                if isinstance(val, str):
+                    try:
+                        num = float(val.replace("%", "").strip())
+                        val = num / 100 if num > 1 else num
+                    except Exception:
+                        continue
+                kpi_rows.append({"KPI": item.get("label", "KPI"), "Valeur": float(val)})
+
+            if kpi_rows:
+                kpi_df = pd.DataFrame(kpi_rows)
+                fig_kpi = px.bar(
+                    kpi_df,
+                    x="Valeur",
+                    y="KPI",
+                    orientation="h",
+                    color_discrete_sequence=["#1f6feb"],
+                    template="plotly_dark",
+                )
+                fig_kpi.update_layout(
+                    height=280,
+                    margin=dict(l=0, r=0, t=10, b=0),
+                    xaxis_tickformat=".0%",
+                    paper_bgcolor="#0d1117",
+                    plot_bgcolor="#0d1117",
+                )
+                st.plotly_chart(fig_kpi, width="stretch")
+
+            with st.expander("Réponse brute du dernier run GCS"):
+                st.json(latest_gcs)
+        else:
+            st.info(f"Aucun artefact KPI dans `{GCS_RESULTS_PREFIX}`.")
+
+        # ── Note de bas de page ────────────────────────────────────────────
+        st.divider()
+        st.markdown(
+            """
+            <div style="background:#161b22;border:1px solid #21262d;border-radius:12px;padding:16px;">
+              <div style="font-size:12px;color:#8b949e;line-height:1.8;">
+                <b style="color:#e6edf3;">Source principale :</b> Prefect Cloud API
+                (<code>/flows/runs</code>) — runs auto-schedulés et manuels.<br>
+                <b style="color:#e6edf3;">Source secondaire :</b> GCS
+                (<code>prefect-results/</code>) — artefacts JSON produits par les flows.<br>
+                <b style="color:#e6edf3;">Rafraîchissement :</b> automatique toutes les 30s
+                via <code>@st.cache_data(ttl=30)</code>.
               </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-
-        latest_kpis = latest_summary.get("kpis", []) if isinstance(latest_summary, dict) else []
-        if isinstance(latest_kpis, list) and latest_kpis:
-            st.markdown(
-                '<div class="sec-header">📌 KPIs du dernier run</div>', unsafe_allow_html=True
-            )
-            kpi_rows = []
-            for item in latest_kpis:
-                if not isinstance(item, dict):
-                    continue
-                val = item.get("value_pct")
-                if val is None:
-                    raw_val = item.get("value")
-                    try:
-                        val = float(raw_val)
-                    except Exception:
-                        val = None
-                if val is None:
-                    continue
-                if isinstance(val, str):
-                    sval = val.replace("%", "")
-                    try:
-                        val = float(sval) / 100 if float(sval) > 1 else float(sval)
-                    except Exception:
-                        continue
-                kpi_rows.append({"KPI": item.get("label", "KPI"), "Valeur": float(val)})
-            if kpi_rows:
-                kpi_df = pd.DataFrame(kpi_rows)
-                fig_kpi = px.bar(
-                    kpi_df, x="Valeur", y="KPI", orientation="h", template="plotly_dark"
-                )
-                fig_kpi.update_layout(
-                    height=320, margin=dict(l=0, r=0, t=10, b=0), xaxis_tickformat=".0%"
-                )
-                st.plotly_chart(fig_kpi, width="stretch")
-
-        st.markdown('<div class="sec-header">📈 Historique des runs</div>', unsafe_allow_html=True)
-        if not flow_runs.empty:
-            history = flow_runs.copy()
-            history["date_label"] = (
-                history["computed_at"].dt.tz_convert("Europe/Paris").dt.strftime("%d/%m %H:%M")
-                if history["computed_at"].notna().any()
-                else history.index.astype(str)
-            )
-            status_order = {"success": 1, "completed": 1, "failed": 0, "crashed": 0}
-            history["score"] = history["status"].map(status_order).fillna(0)
-            fig_hist = px.scatter(
-                history,
-                x="computed_at",
-                y="deployment_name",
-                color="status",
-                symbol="status",
-                hover_data={"results_blob": True, "computed_at": True},
-                template="plotly_dark",
-            )
-            fig_hist.update_layout(
-                height=330, margin=dict(l=0, r=0, t=10, b=0), legend_title_text="Statut"
-            )
-            st.plotly_chart(fig_hist, width="stretch")
-            st.dataframe(
-                history[["computed_at", "deployment_name", "status", "results_blob"]].rename(
-                    columns={
-                        "computed_at": "Exécuté le",
-                        "deployment_name": "Déploiement",
-                        "status": "Statut",
-                        "results_blob": "Source",
-                    }
-                ),
-                width="stretch",
-                height=260,
-            )
-        else:
-            st.info("Aucun historique de run disponible.")
-
-        if latest_summary:
-            with st.expander("Réponse brute du dernier run"):
-                st.json(latest_summary)
-
-    st.divider()
-    st.markdown(
-        """
-        <div style="background:#161b22;border:1px solid #21262d;border-radius:12px;padding:16px;">
-          <div style="font-size:13px;color:#8b949e;line-height:1.8;">
-            La vue ci-dessus se met à jour automatiquement en relisant le dernier artefact Prefect trouvé dans GCS.
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
 
 # ══════════════════════════════════════════════
