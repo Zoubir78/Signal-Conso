@@ -6,6 +6,7 @@ Architecture :
   POST /flows/nombre-signalements → déclenche flow_nombre_signalements
   POST /flows/transmis            → déclenche flow_transmis_global
   POST /flows/lus-reponse         → déclenche flow_signalements_lus_reponse
+  GET  /flows/runs                → liste les derniers runs depuis Prefect Cloud API
   GET  /flows/status/{run_id}     → statut d'un flow run
   GET  /flows/latest-kpis         → derniers KPIs publiés depuis GCS
 """
@@ -27,7 +28,6 @@ router = APIRouter()
 GCS_BUCKET_NAME: str = os.getenv("GCS_BUCKET_NAME", "clean_complaints")
 GCS_RESULTS_PREFIX: str = os.getenv("GCS_RESULTS_PREFIX", "prefect-results/")
 
-# Nom du déploiement Prefect Cloud (défini dans prefect.yaml)
 PREFECT_DEPLOYMENT_PIPELINE = os.getenv(
     "PREFECT_DEPLOYMENT_PIPELINE",
     "kpi-pipeline-flow/signal-conso-pipeline",
@@ -45,46 +45,36 @@ PREFECT_DEPLOYMENT_REPONSE = os.getenv(
     "flow-signalements-lus-reponse/kpi-signalements-lus-reponse",
 )
 
+# Noms des déploiements surveillés (auto-scheduled)
+WATCHED_DEPLOYMENT_NAMES = [
+    "signal-conso-pipeline",
+    "kpi-nombre-signalements",
+    "kpi-transmis-global",
+    "kpi-signalements-lus-reponse",
+    "signal-conso-daily-report",
+]
+
 
 # ══════════════════════════════════════════════════════════════════════════════
-# SCHÉMAS (Pydantic v2)
+# SCHÉMAS
 # ══════════════════════════════════════════════════════════════════════════════
 
 
 class PipelineRequest(BaseModel):
-    """Paramètres du pipeline KPI complet."""
-
-    bucket_name: str = Field(default=GCS_BUCKET_NAME, description="Nom du bucket GCS")
-    prefix: str = Field(default="processed/", description="Préfixe GCS des fichiers traités")
-    reference_date: date | None = Field(
-        default=None, description="Date de référence (défaut: aujourd'hui)"
-    )
-    period: str = Field(
-        default="Depuis le début du mois",
-        description="'Depuis le début du mois' | '7 derniers jours' | 'Toutes les données'",
-    )
-    region: str | None = Field(default=None, description="Filtre région (ex: 'Île-de-France')")
-    department_label: str | None = Field(
-        default=None, description="Filtre département (ex: '75 - Paris')"
-    )
+    bucket_name: str = Field(default=GCS_BUCKET_NAME)
+    prefix: str = Field(default="processed/")
+    reference_date: date | None = Field(default=None)
+    period: str = Field(default="Depuis le début du mois")
+    region: str | None = Field(default=None)
+    department_label: str | None = Field(default=None)
 
     model_config = {
-        "json_schema_extra": {
-            "example": {
-                "period": "7 derniers jours",
-                "region": "Île-de-France",
-            }
-        }
+        "json_schema_extra": {"example": {"period": "7 derniers jours", "region": "Île-de-France"}}
     }
 
 
 class TransmisRequest(BaseModel):
-    """Paramètres du flow transmis (KPI 2 et/ou 3)."""
-
-    kpi_type: str = Field(
-        default="both",
-        description="'transmis' | 'transmis_lus' | 'both'",
-    )
+    kpi_type: str = Field(default="both")
     bucket_name: str = Field(default=GCS_BUCKET_NAME)
     prefix: str = Field(default="processed/")
     period: str = Field(default="Depuis le début du mois")
@@ -93,8 +83,6 @@ class TransmisRequest(BaseModel):
 
 
 class FlowRunResponse(BaseModel):
-    """Réponse après déclenchement d'un flow."""
-
     flow_run_id: str
     flow_run_name: str
     deployment_name: str
@@ -102,9 +90,23 @@ class FlowRunResponse(BaseModel):
     message: str
 
 
-class KpiSummaryResponse(BaseModel):
-    """Résumé des KPIs calculés."""
+class FlowRunSummary(BaseModel):
+    """Résumé d'un run Prefect Cloud pour le dashboard."""
 
+    flow_run_id: str
+    flow_run_name: str
+    deployment_name: str
+    flow_name: str
+    state: str
+    state_type: str
+    created: str | None = None
+    start_time: str | None = None
+    end_time: str | None = None
+    duration_seconds: float | None = None
+    scheduled: bool = False
+
+
+class KpiSummaryResponse(BaseModel):
     status: str
     source: str | None = None
     computed_at: str | None = None
@@ -117,47 +119,27 @@ class KpiSummaryResponse(BaseModel):
 
 
 async def _trigger_deployment(deployment_name: str, parameters: dict) -> dict[str, Any]:
-    """
-    Déclenche un flow run via le client Prefect asynchrone.
-    Retourne le flow_run créé.
-    """
     try:
         from prefect.client.orchestration import get_client
     except ImportError:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Prefect non installé dans l'environnement API. "
-                "Ajoutez 'prefect>=3.0,<4' aux dépendances."
-            ),
-        ) from None
+        raise HTTPException(status_code=503, detail="Prefect non installé.") from None
 
     try:
         async with get_client() as client:
-            # 1. On récupère les déploiements
             deployments = await client.read_deployments()
-
-            # 2. Correction ici : On cherche le déploiement correspondant
-            deployment = None
-            for d in deployments:
-                # On vérifie si le nom du déploiement correspond au format "flow-name/deployment-name"
-                # Ou simplement au nom du déploiement seul.
-                if d.name == deployment_name.split("/")[-1]:
-                    deployment = d
-                    break
-
+            deployment = next(
+                (d for d in deployments if d.name == deployment_name.split("/")[-1]),
+                None,
+            )
             if deployment is None:
                 raise HTTPException(
                     status_code=404,
                     detail=f"Déploiement '{deployment_name}' introuvable.",
                 )
-
-            # 3. Création du flow run
             flow_run = await client.create_flow_run_from_deployment(
                 deployment_id=deployment.id,
                 parameters=parameters,
             )
-
             return {
                 "flow_run_id": str(flow_run.id),
                 "flow_run_name": flow_run.name,
@@ -165,7 +147,6 @@ async def _trigger_deployment(deployment_name: str, parameters: dict) -> dict[st
                 "state": str(flow_run.state.type.value) if flow_run.state else "SCHEDULED",
                 "message": f"Flow run '{flow_run.name}' déclenché avec succès.",
             }
-
     except HTTPException:
         raise
     except Exception as exc:
@@ -173,33 +154,23 @@ async def _trigger_deployment(deployment_name: str, parameters: dict) -> dict[st
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ROUTES
+# ROUTES — DÉCLENCHEMENT
 # ══════════════════════════════════════════════════════════════════════════════
 
 
 @router.post(
-    "/pipeline",
-    response_model=FlowRunResponse,
-    summary="Déclenche le pipeline KPI complet",
-    description=(
-        "Lance le flow Prefect `kpi-pipeline-flow` : extraction GCS → filtrage → "
-        "calcul des 4 KPIs (signalements, transmis, lus, réponse) → publication artifact."
-    ),
+    "/pipeline", response_model=FlowRunResponse, summary="Déclenche le pipeline KPI complet"
 )
 async def trigger_pipeline(body: PipelineRequest) -> FlowRunResponse:
     params = body.model_dump(exclude_none=True)
-    if "reference_date" in params and params["reference_date"] is not None:
+    if params.get("reference_date") is not None:
         params["reference_date"] = params["reference_date"].isoformat()
-
     result = await _trigger_deployment(PREFECT_DEPLOYMENT_PIPELINE, params)
     return FlowRunResponse(**result)
 
 
 @router.post(
-    "/nombre-signalements",
-    response_model=FlowRunResponse,
-    summary="Déclenche le KPI : nombre de signalements",
-    description="Lance uniquement le flow calculant le nombre total de signalements.",
+    "/nombre-signalements", response_model=FlowRunResponse, summary="KPI : nombre de signalements"
 )
 async def trigger_nombre_signalements(
     bucket_name: str = Query(default=GCS_BUCKET_NAME),
@@ -207,26 +178,15 @@ async def trigger_nombre_signalements(
     period: str = Query(default="Depuis le début du mois"),
     region: str | None = Query(default=None),
 ) -> FlowRunResponse:
-    params = {
-        "bucket_name": bucket_name,
-        "prefix": prefix,
-        "period": period,
-    }
+    params = {"bucket_name": bucket_name, "prefix": prefix, "period": period}
     if region:
         params["region"] = region
-
     result = await _trigger_deployment(PREFECT_DEPLOYMENT_NOMBRE, params)
     return FlowRunResponse(**result)
 
 
 @router.post(
-    "/transmis",
-    response_model=FlowRunResponse,
-    summary="Déclenche les KPIs : signalements transmis et/ou transmis lus",
-    description=(
-        "Lance le flow `flow-transmis-global`. "
-        "Paramètre `kpi_type` : 'transmis' | 'transmis_lus' | 'both'."
-    ),
+    "/transmis", response_model=FlowRunResponse, summary="KPIs : transmis et/ou transmis lus"
 )
 async def trigger_transmis(body: TransmisRequest) -> FlowRunResponse:
     params = body.model_dump(exclude_none=True)
@@ -234,38 +194,115 @@ async def trigger_transmis(body: TransmisRequest) -> FlowRunResponse:
     return FlowRunResponse(**result)
 
 
-@router.post(
-    "/lus-reponse",
-    response_model=FlowRunResponse,
-    summary="Déclenche le KPI : signalements lus ayant une réponse",
-    description="Lance uniquement le flow calculant le taux de réponse aux signalements lus.",
-)
+@router.post("/lus-reponse", response_model=FlowRunResponse, summary="KPI : lus ayant une réponse")
 async def trigger_lus_reponse(
     bucket_name: str = Query(default=GCS_BUCKET_NAME),
     prefix: str = Query(default="processed/"),
     period: str = Query(default="Depuis le début du mois"),
     region: str | None = Query(default=None),
 ) -> FlowRunResponse:
-    params = {
-        "bucket_name": bucket_name,
-        "prefix": prefix,
-        "period": period,
-    }
+    params = {"bucket_name": bucket_name, "prefix": prefix, "period": period}
     if region:
         params["region"] = region
-
     result = await _trigger_deployment(PREFECT_DEPLOYMENT_REPONSE, params)
     return FlowRunResponse(**result)
 
 
-# ── GET status ────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# ROUTE — LISTE DES RUNS PREFECT CLOUD (auto-scheduled + manuels)
+# ══════════════════════════════════════════════════════════════════════════════
 
 
 @router.get(
-    "/status/{run_id}",
-    summary="Statut d'un flow run Prefect",
-    description="Retourne l'état courant d'un flow run (SCHEDULED, RUNNING, COMPLETED, FAILED…).",
+    "/runs",
+    response_model=list[FlowRunSummary],
+    summary="Derniers runs Prefect Cloud",
+    description=(
+        "Interroge Prefect Cloud API et retourne les derniers runs "
+        "(auto-schedulés et manuels) pour tous les déploiements Signal Conso."
+    ),
 )
+async def get_flow_runs(
+    limit: int = Query(default=20, ge=1, le=100, description="Nombre de runs à retourner"),
+    deployment_name: str | None = Query(default=None, description="Filtrer par déploiement"),
+) -> list[FlowRunSummary]:
+    try:
+        from prefect.client.orchestration import get_client
+        from prefect.client.schemas.filters import (
+            FlowRunFilter,
+            FlowRunFilterDeploymentId,
+        )
+        from prefect.client.schemas.sorting import FlowRunSort
+    except ImportError:
+        raise HTTPException(status_code=503, detail="Prefect non disponible.") from None
+
+    try:
+        async with get_client() as client:
+            # Récupérer les déploiements Signal Conso
+            all_deployments = await client.read_deployments()
+            watched = [
+                d
+                for d in all_deployments
+                if d.name in WATCHED_DEPLOYMENT_NAMES
+                or (deployment_name and d.name == deployment_name)
+            ]
+
+            if not watched:
+                return []
+
+            deployment_ids = [d.id for d in watched]
+            dep_id_to_name = {str(d.id): d.name for d in watched}
+
+            # Lire les flow runs filtrés par deployment_id
+            flow_runs = await client.read_flow_runs(
+                flow_run_filter=FlowRunFilter(
+                    deployment_id=FlowRunFilterDeploymentId(any_=deployment_ids)
+                ),
+                sort=FlowRunSort.EXPECTED_START_TIME_DESC,
+                limit=limit,
+            )
+
+            results: list[FlowRunSummary] = []
+            for run in flow_runs:
+                dep_name = dep_id_to_name.get(str(run.deployment_id), "—")
+                state_type = run.state.type.value if run.state else "UNKNOWN"
+                state_name = run.state.name if run.state else "Unknown"
+
+                # Calcul durée
+                duration = None
+                if run.start_time and run.end_time:
+                    duration = (run.end_time - run.start_time).total_seconds()
+
+                results.append(
+                    FlowRunSummary(
+                        flow_run_id=str(run.id),
+                        flow_run_name=run.name,
+                        deployment_name=dep_name,
+                        flow_name=run.flow_id and str(run.flow_id) or "—",
+                        state=state_name,
+                        state_type=state_type,
+                        created=run.created.isoformat() if run.created else None,
+                        start_time=run.start_time.isoformat() if run.start_time else None,
+                        end_time=run.end_time.isoformat() if run.end_time else None,
+                        duration_seconds=duration,
+                        scheduled=run.auto_scheduled if hasattr(run, "auto_scheduled") else False,
+                    )
+                )
+
+            return results
+
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Erreur Prefect API : {exc}") from exc
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ROUTE — STATUT D'UN RUN
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+@router.get("/status/{run_id}", summary="Statut d'un flow run Prefect")
 async def get_flow_run_status(run_id: str) -> dict[str, Any]:
     try:
         from prefect.client.orchestration import get_client
@@ -287,18 +324,13 @@ async def get_flow_run_status(run_id: str) -> dict[str, Any]:
     except Exception as err:
         raise HTTPException(status_code=500, detail=str(err)) from err
 
-    # ── GET latest KPIs depuis GCS ────────────────────────────────────────────────
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ROUTE — DERNIERS KPIs DEPUIS GCS
+# ══════════════════════════════════════════════════════════════════════════════
 
 
-@router.get(
-    "/latest-kpis",
-    response_model=KpiSummaryResponse,
-    summary="Derniers KPIs calculés",
-    description=(
-        "Lit le fichier JSON de résultats le plus récent dans GCS "
-        f"(préfixe : {GCS_RESULTS_PREFIX}) et retourne les KPIs."
-    ),
-)
+@router.get("/latest-kpis", response_model=KpiSummaryResponse, summary="Derniers KPIs calculés")
 def get_latest_kpis() -> KpiSummaryResponse:
     try:
         from datetime import UTC, datetime
@@ -312,10 +344,7 @@ def get_latest_kpis() -> KpiSummaryResponse:
         if not blobs:
             raise HTTPException(
                 status_code=404,
-                detail=(
-                    f"Aucun résultat trouvé dans gs://{GCS_BUCKET_NAME}/{GCS_RESULTS_PREFIX}. "
-                    "Lancez d'abord le pipeline via POST /flows/pipeline."
-                ),
+                detail=f"Aucun résultat dans gs://{GCS_BUCKET_NAME}/{GCS_RESULTS_PREFIX}.",
             )
 
         fallback = datetime.min.replace(tzinfo=UTC)
