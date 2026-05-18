@@ -460,6 +460,28 @@ def _keyword_freq(df: pd.DataFrame, limit: int = 20) -> pd.Series:
 # ─────────────────────────────────────────────
 # GCS HELPERS
 # ─────────────────────────────────────────────
+
+
+@st.cache_data(ttl=60)  # S'exécute au chargement, puis max une fois toutes les 60 secondes
+def auto_sync_prefect_runs():
+    """Déclenche la synchronisation des derniers runs Prefect vers GCS."""
+    try:
+        # Option A : Si le fichier est à la racine ou dans le PYTHONPATH
+        from scripts.init_prefect_results_gcs import sync_prefect_runs_to_gcs
+
+        # Option B (si vous utilisez la structure app/scripts/...) :
+        # from app.scripts.init_prefect_results_gcs import sync_prefect_runs_to_gcs
+
+        sync_prefect_runs_to_gcs(limit=10)
+    except Exception as e:
+        # Utilisation de st.sidebar.warning pour ne pas bloquer l'affichage principal en cas de bug API
+        st.sidebar.warning(f"⚠️ Erreur de synchro Prefect Cloud : {e}")
+
+
+# APPEL AUTOMATIQUE : Placé ici, il s'exécute dès le chargement de la page
+auto_sync_prefect_runs()
+
+
 @st.cache_resource
 def _gcs() -> storage.Client:
     return storage.Client()
