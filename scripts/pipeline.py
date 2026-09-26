@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -136,7 +137,7 @@ def _print_leaderboard(results: list[dict], log) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def run_pipeline(log) -> dict:
+def run_pipeline(log, progress_callback: Callable[[int, int], None] | None = None) -> dict:
     """
     Pipeline complet SignalConso — appelé depuis Streamlit ou CLI.
 
@@ -147,7 +148,13 @@ def run_pipeline(log) -> dict:
       ④ Lecture mart BigQuery
       ⑤ Entraînement multi-modèles (TF-IDF + LogReg · SGD · SVC · NB · RF)
       ⑥ Leaderboard + sélection du meilleur
-      ⑦ Upload GCS models/ + rapport JSON
+      ⑦ Upload GCS models/ (meilleur modèle uniquement) + rapport JSON
+
+    Args:
+        log: fonction de journalisation (ex: print, ou callback Streamlit).
+        progress_callback: fonction optionnelle (nb_extrait, limite) appelée
+            en temps réel pendant l'extraction API, pour alimenter une
+            barre de progression côté appelant (ex: Streamlit).
 
     Returns:
         dict : raw_rows, mart_rows, best_model, accuracy, f1_macro,
@@ -164,8 +171,9 @@ def run_pipeline(log) -> dict:
     log("📥 Extraction API SignalConso...")
     raw_df = extract_from_signalconso_api(
         API_URL,
-        limit=50_000,
+        limit=10_000,
         months_back=12,  # 12 mois glissants
+        progress_callback=progress_callback,
     )
     log(f"  ✔ {len(raw_df):,} enregistrements extraits")
 
@@ -229,37 +237,26 @@ def run_pipeline(log) -> dict:
     _print_leaderboard(all_results, log)
 
     best = all_results[0]
-    top2 = all_results[:2]
     log(
         f"🏆 Meilleur modèle : {best['model_name']} "
         f"(accuracy={best['accuracy']:.2%} · f1-macro={best.get('f1_macro', 0):.2%})"
     )
 
-    # ── ⑦ UPLOAD ARTEFACTS ────────────────────────────────────────────────────
-    log("📤 Upload des artefacts vers GCS...")
+    # ── ⑦ UPLOAD DU MEILLEUR MODÈLE UNIQUEMENT ────────────────────────────────
+    log("📤 Upload du meilleur modèle vers GCS...")
 
-    # Top-2 modèles versionnés
-    for r in top2:
-        local = models_dir / f"{r['model_name']}.joblib"
-        if local.exists():
-            try:
-                upload_file_to_gcs(
-                    settings.GCS_BUCKET_NAME,
-                    str(local),
-                    f"models/runs/{today}/{r['model_name']}.joblib",
-                )
-                log(f"  ✔ {r['model_name']}.joblib uploadé")
-            except Exception as e:
-                log(f"  ⚠ Upload {r['model_name']} échoué : {e}")
-
-    # Meilleur modèle → latest
     best_local = models_dir / f"{best['model_name']}.joblib"
-    for dest in ["models/model.joblib", f"models/model_{today}.joblib"]:
+    upload_targets = [
+        "models/model.joblib",
+        f"models/model_{today}.joblib",
+        f"models/runs/{today}/{best['model_name']}.joblib",
+    ]
+    for dest in upload_targets:
         try:
             upload_file_to_gcs(settings.GCS_BUCKET_NAME, str(best_local), dest)
         except Exception as e:
-            log(f"  ⚠ Upload latest échoué ({dest}) : {e}")
-    log("  ✔ Best model → models/model.joblib")
+            log(f"  ⚠ Upload échoué ({dest}) : {e}")
+    log(f"  ✔ {best['model_name']}.joblib uploadé → models/model.joblib")
 
     # Rapport JSON (lu par le dashboard)
     report = {
