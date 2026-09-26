@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date, timedelta
 
 import pandas as pd
@@ -8,12 +9,17 @@ import requests
 
 def extract_from_signalconso_api(
     api_url: str,
-    limit: int = 50_000,
+    limit: int = 10_000,
     months_back: int = 12,  # ← fenêtre glissante par défaut
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> pd.DataFrame:
     """
     Pagination par tranches de dates pour contourner la limite offset=10 000
     de l'API OpenDataSoft.
+
+    progress_callback: fonction optionnelle appelée après chaque page
+        récupérée avec (nb_enregistrements_extraits, limite_totale),
+        pour suivre l'avancement en temps réel (ex: barre de progression).
     """
     page_size = 100
     max_offset = 9_900  # ← limite dure ODS
@@ -47,6 +53,9 @@ def extract_from_signalconso_api(
 
             rows.extend(records)
             offset += page_size
+
+            if progress_callback is not None:
+                progress_callback(min(len(rows), limit), limit)
 
         cursor = next_cursor
 

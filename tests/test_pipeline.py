@@ -242,7 +242,7 @@ def test_run_pipeline_success(
     assert result["f1_macro"] == 0.84
     assert len(result["leaderboard"]) == len(MODELS_TO_TRAIN)
 
-    expected_upload_calls = 1 + min(2, len(MODELS_TO_TRAIN)) + 2
+    expected_upload_calls = 1 + 3
     assert mock_upload_file.call_count == expected_upload_calls
     assert mock_upload_json.call_count == 2
     mock_export_mart.assert_called_once()

@@ -1604,6 +1604,14 @@ with tab_pipeline:
         log_lines: list[str] = []
         log_box = st.empty()
 
+        extract_progress = st.progress(0, text="📥 Extraction API SignalConso : en attente…")
+
+        def _extract_progress(done: int, total: int) -> None:
+            pct = min(done / total, 1.0) if total else 0.0
+            extract_progress.progress(
+                pct, text=f"📥 Extraction API SignalConso : {done:,} / {total:,} enregistrements"
+            )
+
         def _log(msg: str):
             log_lines.append(str(msg))
             log_html = "<br>".join(
@@ -1626,7 +1634,8 @@ with tab_pipeline:
         try:
             from scripts.pipeline import run_pipeline
 
-            result = run_pipeline(_log)
+            result = run_pipeline(_log, progress_callback=_extract_progress)
+            extract_progress.progress(1.0, text="📥 Extraction API SignalConso : terminée ✅")
             st.success("✅ Pipeline terminé avec succès !")
 
             # Résumé des résultats
