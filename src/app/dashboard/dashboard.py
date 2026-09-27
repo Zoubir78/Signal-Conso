@@ -1688,7 +1688,7 @@ with tab_gcs:
     with g1:
         prefix = st.radio(
             "Dossier",
-            ["raw/", "processed/", "models/", "predictions/"],
+            ["raw/", "processed/", "models/", "predictions/", "prefect-results/"],
             label_visibility="collapsed",
         )
     with g2:
