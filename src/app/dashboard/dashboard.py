@@ -462,26 +462,6 @@ def _keyword_freq(df: pd.DataFrame, limit: int = 20) -> pd.Series:
 # ─────────────────────────────────────────────
 
 
-@st.cache_data(ttl=60)
-def auto_sync_prefect_runs():
-    """Déclenche la synchronisation des derniers runs Prefect vers GCS."""
-    try:
-        from scripts.init_prefect_results_gcs import sync_prefect_runs_to_gcs
-    except ImportError:
-        st.sidebar.warning(
-            "⚠️ Impossible d'importer sync_prefect_runs_to_gcs. Vérifiez que 'scripts/init_prefect_results_gcs.py' est accessible."
-        )
-        return
-
-    try:
-        sync_prefect_runs_to_gcs(limit=10)
-    except Exception as e:
-        st.sidebar.warning(f"⚠️ Erreur de synchro Prefect Cloud : {e}")
-
-
-auto_sync_prefect_runs()
-
-
 @st.cache_resource
 def _gcs() -> storage.Client:
     return storage.Client()
@@ -1099,34 +1079,21 @@ with tab_flows:
 
     st.divider()
 
-    # ── Chargement depuis Prefect Cloud API ───────────────────────────────
-    with st.spinner("Chargement des runs Prefect Cloud..."):
-        cloud_runs_raw = _fetch_prefect_cloud_runs(limit=30)
-        cloud_df = _cloud_runs_to_dataframe(cloud_runs_raw)
+    # ── Chargement depuis l'API FastAPI (Prefect Cloud) ───────────────────
+    with st.spinner("Chargement des runs depuis l'API FastAPI..."):
+        cloud_runs_raw = _fetch_prefect_cloud_runs(limit=100)
+        runs_df = _cloud_runs_to_dataframe(cloud_runs_raw)
 
-    # ── Fallback GCS si l'API est indisponible ────────────────────────────
-    gcs_runs = _prefect_runs_dataframe(limit=20)
-    api_available = len(cloud_df) > 0
-
-    if not api_available and gcs_runs.empty:
+    if runs_df.empty:
         st.info(
             "Aucun run trouvé. "
             "Vérifiez que l'API FastAPI est démarrée et que des flows ont été exécutés."
         )
     else:
-        # ── Source des données ─────────────────────────────────────────────
-        if api_available:
-            runs_df = cloud_df
-            st.success(
-                f"✅ {len(runs_df)} run(s) récupéré(s) depuis Prefect Cloud API",
-                icon="🟢",
-            )
-        else:
-            runs_df = gcs_runs.rename(columns={"computed_at": "start_time"})
-            st.warning(
-                "⚠️ API FastAPI indisponible — affichage depuis GCS (artefacts Prefect).",
-                icon="🟡",
-            )
+        st.success(
+            f"✅ {len(runs_df)} run(s) récupéré(s) depuis l'API FastAPI",
+            icon="🟢",
+        )
 
         # ── Métriques du dernier run ───────────────────────────────────────
         if not runs_df.empty:
@@ -1162,21 +1129,14 @@ with tab_flows:
         st.markdown('<div class="sec-header">📋 Historique des runs</div>', unsafe_allow_html=True)
 
         if not runs_df.empty:
-            if api_available:
-                display_cols = {
-                    "start_time": "Démarré le",
-                    "deployment_name": "Déploiement",
-                    "flow_run_name": "Run",
-                    "state": "État",
-                    "duration_s": "Durée (s)",
-                    "scheduled": "Auto",
-                }
-            else:
-                display_cols = {
-                    "start_time": "Démarré le",
-                    "deployment_name": "Déploiement",
-                    "status": "Statut",
-                }
+            display_cols = {
+                "start_time": "Démarré le",
+                "deployment_name": "Déploiement",
+                "flow_run_name": "Run",
+                "state": "État",
+                "duration_s": "Durée (s)",
+                "scheduled": "Auto",
+            }
 
             table_df = runs_df[[c for c in display_cols if c in runs_df.columns]].copy()
             table_df = table_df.rename(columns=display_cols)
@@ -1294,10 +1254,10 @@ with tab_flows:
             """
             <div style="background:#161b22;border:1px solid #21262d;border-radius:12px;padding:16px;">
               <div style="font-size:12px;color:#8b949e;line-height:1.8;">
-                <b style="color:#e6edf3;">Source principale :</b> Prefect Cloud API
-                (<code>/flows/runs</code>) — runs auto-schedulés et manuels.<br>
-                <b style="color:#e6edf3;">Source secondaire :</b> GCS
-                (<code>prefect-results/</code>) — artefacts JSON produits par les flows.<br>
+                <b style="color:#e6edf3;">Source :</b> API FastAPI
+                (<code>/flows/runs</code>) — 20 derniers runs, auto-schedulés et manuels.<br>
+                <b style="color:#e6edf3;">KPIs ci-dessus :</b> issus des artefacts GCS
+                (<code>prefect-results/</code>) produits par le dernier run réussi.<br>
                 <b style="color:#e6edf3;">Rafraîchissement :</b> automatique toutes les 30s
                 via <code>@st.cache_data(ttl=30)</code>.
               </div>
