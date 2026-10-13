@@ -3,6 +3,7 @@ FROM python:3.11-slim
 # ── Variables d'environnement ────────────────────────────────────────────────
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app/src \
     STREAMLIT_SERVER_HEADLESS=true \
     STREAMLIT_SERVER_ENABLECORS=false \
     STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION=false \
@@ -29,7 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY setup.py* pyproject.toml* requirements*.txt ./
 RUN pip install --upgrade pip \
     && pip install dbt-bigquery \
-    && pip install -e ".[dev]" 2>/dev/null || pip install -r requirements.txt
+    && pip install -r requirements.txt -r requirements-flows.txt
 
 # ── Code source ──────────────────────────────────────────────────────────────
 COPY . .
