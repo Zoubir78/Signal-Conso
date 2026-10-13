@@ -493,6 +493,24 @@ def load_evaluation_report() -> dict | None:
     return None
 
 
+@st.cache_data(ttl=120, show_spinner=False)
+def download_blob_bytes(blob_name: str) -> bytes:
+    """Télécharge le contenu brut d'un fichier GCS (pour st.download_button)."""
+    return _gcs().bucket(GCS_BUCKET_NAME).blob(blob_name).download_as_bytes()
+
+
+_MIME_BY_EXT = {
+    ".json": "application/json",
+    ".csv": "text/csv",
+    ".txt": "text/plain",
+    ".joblib": "application/octet-stream",
+}
+
+
+def _mime_for(name: str) -> str:
+    return _MIME_BY_EXT.get(Path(name).suffix.lower(), "application/octet-stream")
+
+
 def download_model(blob_name: str, local: str = "/tmp/tmp_model.joblib") -> str:
     _gcs().bucket(GCS_BUCKET_NAME).blob(blob_name).download_to_filename(local)
     return local
@@ -610,6 +628,78 @@ def list_available_models() -> list[str]:
         return (3, blob, "")
 
     return sorted(dict.fromkeys(blobs), key=_sort_key)
+
+
+# Niveaux de priorité : (libellé, icône)
+PRIORITY_LEVELS = {
+    "critique": ("Critique", "🔴"),
+    "haute": ("Haute", "🟠"),
+    "moyenne": ("Moyenne", "🟡"),
+    "basse": ("Basse", "🟢"),
+}
+
+# Priorité par catégorie : mots-clés (sans accents, minuscules) -> niveau.
+# Le premier mot-clé trouvé dans le nom de la catégorie l'emporte (ordre = du plus au moins urgent).
+# À ajuster selon les règles métier DGCCRF / SignalConso.
+PRIORITY_BY_KEYWORD: list[tuple[str, str]] = [
+    ("sante", "critique"),
+    ("alimentation", "critique"),
+    ("eau", "critique"),
+    ("securite", "critique"),
+    ("banque", "haute"),
+    ("assurance", "haute"),
+    ("mutuelle", "haute"),
+    ("immobilier", "haute"),
+    ("travaux", "haute"),
+    ("renovation", "haute"),
+    ("voiture", "haute"),
+    ("vehicule", "haute"),
+    ("energie", "haute"),
+    ("transport", "moyenne"),
+    ("voyage", "moyenne"),
+    ("telecom", "moyenne"),
+    ("internet", "moyenne"),
+    ("achat", "moyenne"),
+    ("magasin", "moyenne"),
+    ("services", "moyenne"),
+    ("hotel", "moyenne"),
+    ("restaurant", "moyenne"),
+    ("loisir", "basse"),
+    ("sport", "basse"),
+    ("culture", "basse"),
+]
+DEFAULT_PRIORITY = "moyenne"
+
+
+def _strip_accents(txt: str) -> str:
+    import unicodedata
+
+    return "".join(c for c in unicodedata.normalize("NFD", txt) if unicodedata.category(c) != "Mn")
+
+
+def resolve_priority(category: str, api_priority: Any = None) -> tuple[str, str]:
+    """Retourne (libellé, icône). Utilise la priorité renvoyée par l'API si elle existe,
+    sinon la déduit de la catégorie prédite."""
+    if not _is_missing(api_priority):
+        key = _strip_accents(str(api_priority)).strip().lower()
+        aliases = {
+            "critical": "critique",
+            "urgent": "critique",
+            "high": "haute",
+            "elevee": "haute",
+            "medium": "moyenne",
+            "normale": "moyenne",
+            "low": "basse",
+            "faible": "basse",
+        }
+        key = aliases.get(key, key)
+        if key in PRIORITY_LEVELS:
+            return PRIORITY_LEVELS[key]
+    norm = _strip_accents(str(category)).lower()
+    for kw, level in PRIORITY_BY_KEYWORD:
+        if kw in norm:
+            return PRIORITY_LEVELS[level]
+    return PRIORITY_LEVELS[DEFAULT_PRIORITY]
 
 
 def predict_api(text: str, model_blob: str | None = None) -> dict:
@@ -1399,10 +1489,15 @@ with tab_predict:
                     )
 
                     st.markdown("<br>", unsafe_allow_html=True)
-                    r1, r2, r3 = st.columns(3)
+                    prio_label, prio_icon = resolve_priority(
+                        cat, result.get("priority") or result.get("priorite")
+                    )
+
+                    r1, r2, r3, r4 = st.columns(4)
                     r1.metric("Catégorie prédite", cat)
                     r2.metric("Confiance", f"{conf:.2%}")
-                    r3.metric("Modèle", api_model)
+                    r3.metric("Niveau de priorité", f"{prio_icon} {prio_label}")
+                    r4.metric("Modèle", api_model)
 
                     st.success(f"Classification lancée avec **{Path(selected_model_blob).name}**.")
 
@@ -1628,11 +1723,39 @@ with tab_pipeline:
                 html += "</tbody></table>"
                 st.markdown(html, unsafe_allow_html=True)
 
+            # Rapport JSON de ce run (téléchargeable tout de suite)
+            st.download_button(
+                "⬇️ Télécharger le rapport du run (JSON)",
+                data=json.dumps(result, ensure_ascii=False, indent=2, default=str),
+                file_name=f"pipeline_run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                mime="application/json",
+                key="dl_run_report",
+            )
+
             # Rafraîchit le cache pour voir les nouveaux modèles
             st.cache_data.clear()
 
         except Exception as e:
             st.error(f"Erreur pipeline : {e}")
+
+    # ── Dernier rapport d'évaluation disponible sur GCS ──────────────
+    st.divider()
+    st.markdown(
+        '<div class="sec-header">📄 Dernier rapport du pipeline</div>', unsafe_allow_html=True
+    )
+    _last_report = load_evaluation_report()
+    if _last_report:
+        st.download_button(
+            "⬇️ Télécharger evaluation_report.json",
+            data=json.dumps(_last_report, ensure_ascii=False, indent=2),
+            file_name="evaluation_report.json",
+            mime="application/json",
+            key="dl_eval_report",
+        )
+        with st.expander("Aperçu du rapport"):
+            st.json(_last_report)
+    else:
+        st.info("Aucun rapport d'évaluation disponible sur GCS pour le moment.")
 
 
 # ══════════════════════════════════════════════
@@ -1658,6 +1781,41 @@ with tab_gcs:
             blob_df["Extension"] = blob_df["Fichier"].apply(lambda x: Path(x).suffix or "–")
             st.dataframe(blob_df, width="stretch", height=400)
             st.caption(f"{len(blobs)} fichier(s) dans `{prefix}`")
+
+            # ── Téléchargement d'un fichier ──────────────────────────
+            st.markdown(
+                '<div class="sec-header">⬇️ Télécharger un fichier</div>',
+                unsafe_allow_html=True,
+            )
+            downloadable = [b for b in blobs if not b.endswith("/")]
+            only_data = st.checkbox(
+                "Afficher uniquement les fichiers JSON et CSV",
+                value=True,
+                key=f"only_data_{prefix}",
+            )
+            if only_data:
+                downloadable = [b for b in downloadable if b.lower().endswith((".json", ".csv"))]
+
+            if downloadable:
+                chosen = st.selectbox(
+                    "Fichier",
+                    downloadable,
+                    key=f"dl_select_{prefix}",
+                )
+                try:
+                    data_bytes = download_blob_bytes(chosen)
+                    st.download_button(
+                        label=f"⬇️ Télécharger {Path(chosen).name}",
+                        data=data_bytes,
+                        file_name=Path(chosen).name,
+                        mime=_mime_for(chosen),
+                        key=f"dl_btn_{prefix}_{chosen}",
+                    )
+                    st.caption(f"Taille : {len(data_bytes) / 1024:,.1f} Ko")
+                except Exception as e:
+                    st.error(f"Impossible de récupérer `{chosen}` : {e}")
+            else:
+                st.info("Aucun fichier téléchargeable dans ce dossier avec ce filtre.")
         else:
             st.info(f"Aucun fichier dans `{prefix}`.")
 
