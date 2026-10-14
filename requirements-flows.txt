@@ -9,7 +9,7 @@ prefect_gcp>=0.1,<1
 
 # Données (utilisé dans les tasks de transformation)
 pandas>=2.0,<3
-numpy>=1.24,<2
+numpy>=2
 
 # GCS (extraction du dataset)
 google-cloud-storage>=2.10,<3
